@@ -60,7 +60,7 @@ QUEUE_PROCESSED = BASE_DIR / "queue" / "processed"
 QUEUE_QUARANTINE = BASE_DIR / "queue" / "quarantine"
 MODELS_DIR = BASE_DIR / "models"
 STATE_PATH = BASE_DIR / "state.json"
-AGG_INTERVAL_S = 30 * 60        # worker drain interval (matches sim cadence)
+AGG_INTERVAL_S = int(os.environ.get("FCS_AGG_INTERVAL_S", str(30 * 60)))        # worker drain interval (matches sim cadence)
 META_KEYS = {"device_id", "fetch_version", "curriculum_epoch"}
 
 # --- skew-detector heuristics (UNTUNED -- revisit with real fleet data) ---
