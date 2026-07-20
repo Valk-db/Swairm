@@ -10,15 +10,25 @@ rotated-subspace clients, naive stuck at 0.7071 regardless of target rank
 (4/8/16 identical) while reconstruct+SVD reaches 0.0000 at rank 8.
 (simulate_fedavg.py v2)
 
-## D2. Staleness weighting: CONDITIONAL
-- Balanced participation -> uniform weights. Evidence: reciprocal 1/(1+s)
-  gave no error benefit (0.1716 vs 0.1632) while discarding 75% of client
-  work (retention 0.249). (async_events_system.py, 5 seeds)
-- Detected participation skew -> reciprocal 1/(1+s). Evidence: won 15/15
-  fresh seeds (57-71), paired t=6.07, mean gap 0.145 (~32% error reduction).
-  (followup confirmation run)
-- Skew detection not yet wired: detect_skew() in main.py is a stub
-  returning False. Next telemetry task.
+## D2. Staleness weighting: CONDITIONAL -- INVERTED by non-convex evidence
+Original (linear proxy): balanced -> uniform, skew -> reciprocal.
+Under real gradient training with replace semantics (D7), the sign flips
+both ways (harness_nonconvex.py sweep, seeds 42-71):
+- No demographic skew -> reciprocal 1/(1+s). Stale uploads are
+  less-converged full adapters that drag the replace-average backward;
+  reciprocal wins 26/30, 29/30, 30/30 seeds at fetch_every=3/6/9
+  (t=+2.99/+7.85/+11.57). Zero-staleness fleets unaffected (weights
+  collapse to uniform).
+- Detected demographic skew -> UNIFORM. Reciprocal persistently
+  under-weights the stale population, under-fitting its share of the
+  fleet objective (uniform wins at group_het>=1.2, fetch_every<=6,
+  t up to -7.62). CAVEAT: sign crosses over when staleness is deep
+  relative to divergence (fetch_every=9, het=0.6: reciprocal t=+9.44);
+  all skewed-cell gaps are <~5% relative. Uniform chosen under skew:
+  symmetric MSE risk, full work retention, no systematic demographic
+  under-representation.
+- detect_skew() (main.py v1.2, device-set Jaccard night/day) unchanged;
+  only the weighting it triggers is inverted. Thresholds still UNTUNED.
 
 ## D3. Agreement/relevance weighting: PARKED
 Three reasons, all measured: (1) cluster-weight asymmetry with direction
@@ -55,11 +65,27 @@ dir err 1.0 -> 0.0839 (noise floor), magnitude err 0.0064, monotonic
 convergence, no oscillation. Revisit only if delta-accumulation semantics
 are needed for real MLX training.
 
+## D8. Non-convex validation: proxy caveat narrowed
+harness_nonconvex.py: frozen 2-layer tanh MLP; clients train true DoRA
+adapters (A, B, m) with manual-gradient SGD; staleness = genuinely
+training from an old global; aggregation through the PRODUCTION
+aggregate_round() path. Findings (seeds 42-71, paired t):
+- D2 conditional inverted (see revised D2).
+- TRIM_BEFORE_WEIGHTS: no robust difference. Sign flips with staleness
+  depth (False wins 27/30 t=+5.48 at fetch_every=4; True wins 26/30
+  t=-5.13 at fetch_every=6), effect <1% relative either way. Default
+  stays True. CLOSED.
+- Epoch handling: hard rejection beats soft (w=0.3/0.5) on final err
+  AND transition-dip depth in every run. Hard rejection LOCKED.
+Remaining: still a proxy (small MLP, synthetic teachers); real MLX
+on-device training is the final arbiter.
+
 ## Open items (deliberately not decided)
-- Trim-before-weights vs weights-before-trim (config: TRIM_BEFORE_WEIGHTS)
-- Hard vs soft curriculum-epoch rejection (config: epoch_transition_weights)
-- detect_skew() wiring (Circadian per-hour participation baseline)
+- Skew-detector threshold tuning (SKEW_JACCARD_THRESHOLD et al.; needs
+  real fleet participation data)
+- D2 crossover: deep staleness + mild skew favors reciprocal; revisit
+  the inverted conditional if real fleets live in that regime
 - state.json -> SQLite upgrade trigger (multi-writer or >dozen devices)
-- Convex-proxy caveat: all simulation evidence assumes a linear training
-  proxy; real MLX fine-tuning may punish staleness differently. Only real
-  on-device training closes this.
+- Proxy caveat, narrowed by D8: only real MLX on-device training
+  closes it
+

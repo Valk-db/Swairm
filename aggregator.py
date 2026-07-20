@@ -24,12 +24,13 @@ v1.1 changes (behavior-identical, benchmark-driven):
     requiring a human decision. Not implemented.
 
 POLICY (locked by simulation evidence, 2026-07-20, seeds 42-71):
-  - Staleness weighting is CONDITIONAL:
-      balanced participation -> uniform weights
-      detected participation skew -> reciprocal 1/(1+staleness)
-    Evidence: reciprocal won 15/15 fresh seeds under schedule skew
-    (paired t=6.07); under balanced participation it discarded ~75% of
-    client work for no error benefit.
+  - Staleness weighting is CONDITIONAL (INVERTED by D8 non-convex evidence):
+      no demographic skew -> reciprocal 1/(1+staleness)
+      detected demographic skew -> uniform
+    Under replace semantics (D7), stale uploads are less-converged full
+    adapters; downweighting them wins 26-30/30 seeds when populations are
+    homogeneous, but under-represents a demographically distinct stale
+    population. See DECISIONS.md D2/D8 for the crossover caveat.
   - Agreement/relevance weighting is PARKED (unstable cluster asymmetry,
     catastrophic-seed collapse, worst retention). Do not reintroduce
     without new instrumentation.
@@ -71,11 +72,11 @@ TRIM_BEFORE_WEIGHTS = True
 
 # ------------------------------------------------------------------ weights
 def staleness_weights(uploads, current_version, skew_detected):
-    """Conditional policy locked by simulation evidence -- see module docstring."""
+    """Conditional policy INVERTED by non-convex evidence (D8) -- see D2."""
     out = []
     for u in uploads:
         s = max(current_version - u["fetch_version"], 0)
-        out.append(1.0 / (1.0 + s) if skew_detected else 1.0)
+        out.append(1.0 if skew_detected else 1.0 / (1.0 + s))
     return np.array(out, dtype=DTYPE)
 
 

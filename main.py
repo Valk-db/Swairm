@@ -11,7 +11,7 @@ conditional staleness policy.
   The distinguishing signal is DEVICE COMPOSITION: if the device set active
   in the night window and the device set active in the day window are both
   substantial but nearly disjoint (low Jaccard similarity), participation
-  is demographically skewed -> reciprocal 1/(1+s) weighting activates.
+  is demographically skewed -> -> uniform weighting activates (inverted by D8; see DECISIONS.md).
   Thresholds are heuristics pending real fleet data -- marked in config.
 v1.1: lifespan handler replacing deprecated @app.on_event.
 
