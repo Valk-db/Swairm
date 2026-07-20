@@ -1,0 +1,18 @@
+# Python / Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Project Specific Data & Artifacts
+data/
+models/
+queue/
+state.json
+
+# IDE / OS Specific
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

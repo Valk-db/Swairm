@@ -112,7 +112,7 @@ def pack_upload(device_id, fetch_version, curriculum_epoch, modules) -> bytes:
 
 
 def unpack_upload(path: Path) -> dict:
-    with np.load(path) as z:
+    with np.load(path, allow_pickle=True) as z:
         meta = json.loads(bytes(z["__meta__"]).decode())
         if not META_KEYS.issubset(meta):
             raise ValueError(f"missing meta keys: {META_KEYS - set(meta)}")
@@ -286,6 +286,9 @@ try:
             return Response(status_code=404,
                             content="no global adapter yet")
         path = MODELS_DIR / f"v_{state['version']:05d}.npz"
+        if not path.exists():
+            return Response(status_code=404,
+                            content="adapter file missing on disk")
         return Response(content=path.read_bytes(),
                         media_type="application/octet-stream",
                         headers={"X-Adapter-Version": str(state["version"]),
