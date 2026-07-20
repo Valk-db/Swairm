@@ -1,0 +1,216 @@
+{
+  "version": 11,
+  "curriculum_epoch": 1,
+  "rounds": 11,
+  "participation_log": [
+    {
+      "t": 1784531239.2007186,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531259.226054,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531279.2447922,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531299.2661664,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531339.2861638,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531359.3198347,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531379.347268,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531419.3803072,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531439.403268,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784531459.4407172,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    },
+    {
+      "t": 1784534311.6353817,
+      "hour": 3,
+      "devices": [
+        "dev0",
+        "dev1",
+        "dev10",
+        "dev11",
+        "dev2",
+        "dev3",
+        "dev4",
+        "dev5",
+        "dev6",
+        "dev7",
+        "dev8",
+        "dev9"
+      ],
+      "n_uploads": 12
+    }
+  ]
+}
