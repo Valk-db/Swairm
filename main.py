@@ -1,29 +1,34 @@
 """
-main.py -- FCS Anchor service (v1.1)
+main.py -- FCS Anchor service (v1.2)
 ====================================
 FastAPI shell + directory-as-queue + single background aggregation worker,
 wired to aggregator.py (the validated math core).
 
-v1.1: replaced deprecated @app.on_event("startup") with the lifespan
-context manager (current FastAPI pattern). No behavior change.
+v1.2: detect_skew() implemented (was a stub). Completes decision D2's
+conditional staleness policy.
+  Detection principle: demographic skew is NOT detectable from hourly
+  volume (balanced fleets are also diurnal -- everyone charges at night).
+  The distinguishing signal is DEVICE COMPOSITION: if the device set active
+  in the night window and the device set active in the day window are both
+  substantial but nearly disjoint (low Jaccard similarity), participation
+  is demographically skewed -> reciprocal 1/(1+s) weighting activates.
+  Thresholds are heuristics pending real fleet data -- marked in config.
+v1.1: lifespan handler replacing deprecated @app.on_event.
 
 Design (per locked spec):
-  - Upload handler does NO parsing/aggregation: it writes the raw payload to
-    queue/temp/ and atomically os.rename()s it into queue/pending/
-    (Maildir pattern -- crash-safe, no partial files visible to the worker).
-  - ONE background worker drains pending/ on an interval, validates,
-    aggregates via aggregate_round(), writes a versioned snapshot to
-    models/, moves inputs to processed/ (or quarantine/ if malformed).
-    Single-writer: only the worker mutates state.
+  - Upload handler does NO parsing/aggregation: raw payload -> queue/temp/
+    -> atomic os.replace() into queue/pending/ (Maildir pattern).
+  - ONE background worker drains pending/, validates, aggregates via
+    aggregate_round(), snapshots to models/. Single-writer.
   - Version numbers are monotonic, including after any future rollback.
 
-Deviations from spec, made openly (upgrade later if needed):
-  - State is an atomic-rename JSON file, not SQLite/WAL. At family scale
-    with a single writer, SQLite adds nothing yet; the queue durability
-    lives in the filesystem, exactly as designed.
-  - detect_skew() is a stub returning False (uniform weights). Wiring the
-    Circadian participation baseline into it is the next telemetry task --
-    the conditional reciprocal policy activates only once that lands.
+Deviations from spec, made openly:
+  - State is an atomic-rename JSON file, not SQLite/WAL (single writer,
+    family scale; upgrade trigger documented in DECISIONS.md).
+
+Note: participation_log entries gained "hour" and "devices" fields in
+v1.2. Old state.json files are read compatibly (missing fields skipped);
+deleting state.json (gitignored) also resets cleanly.
 
 Payload format (one .npz per upload):
   "__meta__": JSON string {device_id, fetch_version, curriculum_epoch}
@@ -57,6 +62,21 @@ MODELS_DIR = BASE_DIR / "models"
 STATE_PATH = BASE_DIR / "state.json"
 AGG_INTERVAL_S = 30 * 60        # worker drain interval (matches sim cadence)
 META_KEYS = {"device_id", "fetch_version", "curriculum_epoch"}
+
+# --- skew-detector heuristics (UNTUNED -- revisit with real fleet data) ---
+SKEW_WINDOW_ROUNDS = 336        # trailing rounds examined (~7d at 30min)
+SKEW_MIN_HISTORY = 48           # don't judge before ~1 day of rounds
+SKEW_MIN_FRACTION = 0.20        # both windows need >=20% of upload volume
+SKEW_JACCARD_THRESHOLD = 0.30   # device-set overlap below this = skew
+
+
+def _is_night(hour):
+    return hour >= 22 or hour < 7
+
+
+def _is_day(hour):
+    return 9 <= hour < 17
+
 
 for d in (QUEUE_TEMP, QUEUE_PENDING, QUEUE_PROCESSED, QUEUE_QUARANTINE,
           MODELS_DIR):
@@ -116,7 +136,7 @@ def enqueue(raw: bytes) -> str:
     name = f"{int(time.time())}_{uuid.uuid4().hex}.npz"
     tmp = QUEUE_TEMP / name
     tmp.write_bytes(raw)
-    os.rename(tmp, QUEUE_PENDING / name)   # atomic: worker never sees partials
+    os.replace(tmp, QUEUE_PENDING / name)   # atomic: worker never sees partials
     return name
 
 
@@ -134,15 +154,49 @@ def save_snapshot(result) -> Path:
     return path
 
 
-# ------------------------------------------------------------------ skew hook
+# ------------------------------------------------------------------ skew
 def detect_skew(state) -> bool:
     """
-    STUB. Returns False -> uniform weights (the locked balanced-mode policy).
-    TODO: wire the Circadian per-hour participation baseline here; when
-    demographic skew is detected, returning True activates reciprocal
-    1/(1+s) weighting (locked skew-mode policy, 15/15 seeds, t=6.07).
+    Demographic-skew detector (decision D2).
+
+    Compares WHICH devices are active at night vs during the day over the
+    trailing window. Volume alone cannot distinguish "balanced but diurnal"
+    (everyone charges at night) from true demographic skew (different
+    populations at different times) -- device-set overlap can.
+
+    Returns True (-> reciprocal 1/(1+s) weighting) only when:
+      - enough history exists (SKEW_MIN_HISTORY rounds), and
+      - BOTH night and day windows carry >= SKEW_MIN_FRACTION of upload
+        volume (one quiet window = ordinary diurnal pattern, not skew), and
+      - Jaccard(night_devices, day_devices) < SKEW_JACCARD_THRESHOLD.
     """
-    return False
+    log = state["participation_log"][-SKEW_WINDOW_ROUNDS:]
+    if len(log) < SKEW_MIN_HISTORY:
+        return False
+    night_dev, day_dev = set(), set()
+    night_n = day_n = total_n = 0
+    for rec in log:
+        hour = rec.get("hour")
+        devices = rec.get("devices", [])
+        total_n += len(devices)
+        if hour is None:
+            continue
+        if _is_night(hour):
+            night_dev.update(devices)
+            night_n += len(devices)
+        elif _is_day(hour):
+            day_dev.update(devices)
+            day_n += len(devices)
+    if total_n == 0:
+        return False
+    if (night_n < SKEW_MIN_FRACTION * total_n
+            or day_n < SKEW_MIN_FRACTION * total_n):
+        return False                      # ordinary diurnal concentration
+    union = night_dev | day_dev
+    if not union:
+        return False
+    jaccard = len(night_dev & day_dev) / len(union)
+    return jaccard < SKEW_JACCARD_THRESHOLD
 
 
 # ------------------------------------------------------------------ worker
@@ -159,28 +213,32 @@ def drain_once(state, verbose=True):
         except Exception as exc:
             if verbose:
                 print(f"[worker] quarantined {f.name}: {exc}")
-            os.rename(f, QUEUE_QUARANTINE / f.name)
+            os.replace(f, QUEUE_QUARANTINE / f.name)
     if not uploads:
         return None
 
+    skew = detect_skew(state)
     result = aggregate_round(uploads,
                              current_version=state["version"],
                              current_epoch=state["curriculum_epoch"],
-                             skew_detected=detect_skew(state))
+                             skew_detected=skew)
     if result["modules"]:
         snap = save_snapshot(result)
         state["version"] = result["version"]
         state["rounds"] += 1
         state["participation_log"].append(
-            {"t": time.time(), "n_uploads": len(uploads)})
+            {"t": time.time(),
+             "hour": time.localtime().tm_hour,
+             "devices": sorted({u["device_id"] for u in uploads}),
+             "n_uploads": len(uploads)})
         state["participation_log"] = state["participation_log"][-2000:]
         save_state(state)
         if verbose:
             print(f"[worker] round {state['rounds']}: aggregated "
                   f"{len(uploads)} uploads -> version {state['version']} "
-                  f"({snap.name})")
+                  f"({snap.name}, skew_detected={skew})")
     for f in sources:
-        os.rename(f, QUEUE_PROCESSED / f.name)
+        os.replace(f, QUEUE_PROCESSED / f.name)
     return result
 
 
@@ -212,6 +270,7 @@ try:
         return {"version": state["version"],
                 "curriculum_epoch": state["curriculum_epoch"],
                 "rounds": state["rounds"],
+                "skew_detected": detect_skew(state),
                 "pending": len(list(QUEUE_PENDING.glob("*.npz")))}
 
     @app.post("/upload")
@@ -238,7 +297,7 @@ except ImportError:
 
 # ------------------------------------------------------------------ self-test
 def selftest():
-    print("=== main.py self-test (no HTTP) ===")
+    print("=== main.py v1.2 self-test (no HTTP) ===")
     rng = np.random.default_rng(42)
     M_DIM, N_DIM, RANK = 128, 256, 4
     shared_A = rng.standard_normal((RANK, N_DIM)) / np.sqrt(N_DIM)
@@ -257,22 +316,38 @@ def selftest():
                             modules=mod))
     (QUEUE_PENDING / "garbage.npz").write_bytes(b"not an npz file")
 
-    print(f"  queued: 12 valid uploads + 1 garbage file")
+    print("  queued: 12 valid uploads + 1 garbage file")
     result = drain_once(state)
     assert result is not None, "worker produced nothing"
     assert state["version"] == v0 + 1, "version did not advance"
     snap = MODELS_DIR / f"v_{state['version']:05d}.npz"
     assert snap.exists(), "snapshot missing"
-    with np.load(snap) as z:
-        shapes = {k: z[k].shape for k in z.files}
-    print(f"  version: {v0} -> {state['version']}")
-    print(f"  snapshot: {snap.name}, arrays: {shapes}")
+    print(f"  version: {v0} -> {state['version']}, snapshot: {snap.name}")
     print(f"  quarantined: {len(list(QUEUE_QUARANTINE.glob('*.npz')))} "
           f"(expect >= 1)")
-    print(f"  processed:   {len(list(QUEUE_PROCESSED.glob('*.npz')))}")
-    tel = result["telemetry"]["modules"]["layers.0.attn.q_proj"]
-    print(f"  telemetry: aggregated={tel['aggregated']}, "
-          f"trailing_ratio={tel['trailing_ratio']:.4f}")
+
+    # --- detect_skew unit checks on synthetic participation logs ---------
+    def synth_log(disjoint):
+        log = []
+        for r in range(120):                       # 60 night + 60 day rounds
+            if r % 2 == 0:
+                hour, devs = 2, [f"night{d}" for d in range(5)]
+            else:
+                hour = 14
+                devs = ([f"day{d}" for d in range(5)] if disjoint
+                        else [f"night{d}" for d in range(5)])
+            log.append({"t": 0, "hour": hour, "devices": devs,
+                        "n_uploads": len(devs)})
+        return log
+
+    balanced = {"participation_log": synth_log(disjoint=False)}
+    skewed = {"participation_log": synth_log(disjoint=True)}
+    sparse = {"participation_log": synth_log(disjoint=True)[:10]}
+    assert detect_skew(balanced) is False, "balanced flagged as skew"
+    assert detect_skew(skewed) is True, "skew not detected"
+    assert detect_skew(sparse) is False, "judged on insufficient history"
+    print("  detect_skew: balanced=False, disjoint=True, "
+          "sparse-history=False -- all correct")
     print("Self-test PASSED.")
 
 
