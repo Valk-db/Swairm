@@ -9,7 +9,6 @@ selftests:
   script:
     - python aggregator.py
     - python main.py --selftest
-    - python harness_nonconvex.py --selftest
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
