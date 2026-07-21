@@ -1,0 +1,30 @@
+name: macos-swift
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Swift package
+        id: pkg
+        run: |
+          if [ -f Package.swift ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No Package.swift yet - skipping."
+          fi
+
+      - name: swift build
+        if: steps.pkg.outputs.present == 'true'
+        run: swift build
+
+      - name: swift test
+        if: steps.pkg.outputs.present == 'true'
+        run: swift test
