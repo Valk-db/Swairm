@@ -12,7 +12,10 @@ public enum NPZError: Error {
 
 public enum NPZ {
     public static func read(_ data: Data) throws -> [String: NPYArray] {
-        guard let archive = try? Archive(data: data, accessMode: .read) else {
+        let archive: Archive
+        do {
+            archive = try Archive(data: data, accessMode: .read, pathEncoding: nil)
+        } catch {
             throw NPZError.notAnArchive
         }
         var out: [String: NPYArray] = [:]
