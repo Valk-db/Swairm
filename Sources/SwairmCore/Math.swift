@@ -154,23 +154,35 @@ public struct SVDResult {
 }
 
 /// Modified Gram-Schmidt orthonormalization of the columns of `m`, in place.
+/// Projections run twice ("twice is enough") to keep Q orthogonal in float32,
+/// and columns whose residual collapses relative to their original norm are
+/// zeroed instead of normalizing rounding noise into a fake direction.
 func orthonormalizeColumns(_ m: inout Matrix) {
     for j in 0..<m.cols {
-        for i in 0..<j {
-            var dot: Float = 0
-            for r in 0..<m.rows { dot += m[r, i] * m[r, j] }
-            for r in 0..<m.rows { m[r, j] -= dot * m[r, i] }
+        var originalNorm: Float = 0
+        for r in 0..<m.rows { originalNorm += m[r, j] * m[r, j] }
+        originalNorm = originalNorm.squareRoot()
+
+        for _ in 0..<2 {
+            for i in 0..<j {
+                var dot: Float = 0
+                for r in 0..<m.rows { dot += m[r, i] * m[r, j] }
+                for r in 0..<m.rows { m[r, j] -= dot * m[r, i] }
+            }
         }
+
         var norm: Float = 0
         for r in 0..<m.rows { norm += m[r, j] * m[r, j] }
         norm = norm.squareRoot()
-        if norm > 1e-10 {
+
+        if norm > max(1e-6 * originalNorm, 1e-12) {
             for r in 0..<m.rows { m[r, j] /= norm }
         } else {
-            for r in 0..<m.rows { m[r, j] = 0 }
+            for r in 0..<m.rows { m[r, j] = 0 }   // dependent column: drop it
         }
     }
 }
+
 
 /// Jacobi eigendecomposition of a small symmetric matrix.
 /// Returns eigenvalues (descending) and eigenvectors as matching columns.
