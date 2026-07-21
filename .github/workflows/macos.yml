@@ -9,22 +9,44 @@ jobs:
   build-test:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Check for Swift package
-        id: pkg
-        run: |
-          if [ -f Package.swift ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "No Package.swift yet - skipping."
-          fi
+      - uses: actions/checkout@v5
 
       - name: swift build
-        if: steps.pkg.outputs.present == 'true'
         run: swift build
 
       - name: swift test
-        if: steps.pkg.outputs.present == 'true'
         run: swift test
+
+  # End-to-end: real Python Anchor + Swift phone fleet over HTTP.
+  # Proves the Swift .npz codec is byte-compatible with numpy's.
+  integration:
+    runs-on: macos-15
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Anchor dependencies
+        run: pip install numpy scikit-learn fastapi uvicorn
+
+      - name: Start Anchor (fast aggregation interval)
+        run: |
+          FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
+          sleep 3
+          curl -sf http://127.0.0.1:8000/status
+
+      - name: Run Swift fleet against the Anchor
+        run: swift run swairm-client --anchor http://127.0.0.1:8000 --fleet 6 --rounds 3 --interval 8
+
+      - name: Verify aggregation rounds happened
+        run: |
+          curl -sf http://127.0.0.1:8000/status -o status.json
+          cat status.json
+          python -c "import json; s = json.load(open('status.json')); assert s['version'] >= 3, s; print('OK: version advanced to', s['version'])"
+
+      - name: Show Anchor log
+        if: always()
+        run: cat anchor.log
