@@ -1,6 +1,6 @@
 """
-main.py -- FCS Anchor service (v1.2)
-====================================
+main.py -- FCS Anchor service (v1.2 with WebSockets)
+====================================================
 FastAPI shell + directory-as-queue + single background aggregation worker,
 wired to aggregator.py (the validated math core).
 
@@ -46,11 +46,35 @@ import sys
 import threading
 import time
 import uuid
+import asyncio
 from pathlib import Path
 
 import numpy as np
 
 from aggregator import aggregate_round
+
+# =================================================================-- WebSockets
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections = []
+
+    async def connect(self, websocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_text(message)
+            except Exception:
+                self.disconnect(connection)
+
+manager = ConnectionManager()
+main_loop = None
 
 # ------------------------------------------------------------------ config
 BASE_DIR = Path(__file__).resolve().parent
@@ -94,7 +118,7 @@ def load_state():
 def save_state(state):
     tmp = STATE_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, indent=2))
-    os.replace(tmp, STATE_PATH)          # atomic on the same filesystem
+    os.replace(tmp, STATE_PATH)           # atomic on the same filesystem
 
 
 # ------------------------------------------------------------------ payloads
@@ -233,6 +257,13 @@ def drain_once(state, verbose=True):
              "n_uploads": len(uploads)})
         state["participation_log"] = state["participation_log"][-2000:]
         save_state(state)
+        
+        # Broadcast the new version instantly via WebSocket
+        if main_loop and main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast(f"NEW_VERSION:{state['version']}"), main_loop
+            )
+
         if verbose:
             print(f"[worker] round {state['rounds']}: aggregated "
                   f"{len(uploads)} uploads -> version {state['version']} "
@@ -252,17 +283,28 @@ def worker_loop():
         time.sleep(AGG_INTERVAL_S)
 
 
-# ------------------------------------------------------------------ HTTP layer
+# ------------------------------------------------------------------ HTTP & WS layer
 try:
     from contextlib import asynccontextmanager
-    from fastapi import FastAPI, Request, Response
+    from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 
     @asynccontextmanager
     async def lifespan(app):
+        global main_loop
+        main_loop = asyncio.get_running_loop()
         threading.Thread(target=worker_loop, daemon=True).start()
         yield
 
     app = FastAPI(title="FCS Anchor", lifespan=lifespan)
+
+    @app.websocket("/ws/{client_id}")
+    async def websocket_endpoint(websocket: WebSocket, client_id: str):
+        await manager.connect(websocket)
+        try:
+            while True:
+                _ = await websocket.receive_text()
+        except WebSocketDisconnect:
+            manager.disconnect(websocket)
 
     @app.get("/status")
     def status():
@@ -276,7 +318,7 @@ try:
     @app.post("/upload")
     async def upload(request: Request):
         raw = await request.body()
-        name = enqueue(raw)                 # no parsing here, by design
+        name = enqueue(raw)                # no parsing here, by design
         return {"queued": name}
 
     @app.get("/adapter/latest")
@@ -332,7 +374,7 @@ def selftest():
     # --- detect_skew unit checks on synthetic participation logs ---------
     def synth_log(disjoint):
         log = []
-        for r in range(120):                       # 60 night + 60 day rounds
+        for r in range(120):                     # 60 night + 60 day rounds
             if r % 2 == 0:
                 hour, devs = 2, [f"night{d}" for d in range(5)]
             else:
