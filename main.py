@@ -136,7 +136,7 @@ def pack_upload(device_id, fetch_version, curriculum_epoch, modules) -> bytes:
 
 
 def unpack_upload(path: Path) -> dict:
-    with np.load(path, allow_pickle=True) as z:
+    with np.load(path, allow_pickle=False) as z:
         meta = json.loads(bytes(z["__meta__"]).decode())
         if not META_KEYS.issubset(meta):
             raise ValueError(f"missing meta keys: {META_KEYS - set(meta)}")

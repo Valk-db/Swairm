@@ -28,7 +28,7 @@ Run: python validate_magnitude.py   (fast -- single rounds, toy scale)
 
 import numpy as np
 from sklearn.utils.extmath import randomized_svd
-from aggregator import aggregate_module, TELEMETRY_MARGIN
+from aggregator import aggregate_module, TELEMETRY_MARGIN, DTYPE
 
 RNG = np.random.default_rng(42)
 M_DIM, N_DIM, RANK = 128, 256, 4
@@ -59,6 +59,98 @@ def svd_truncate(dense, rank):
     U, S, Vt = randomized_svd(dense, n_components=rank + TELEMETRY_MARGIN,
                               random_state=42)
     return (U[:, :rank] * S[:rank]) @ Vt[:rank]
+
+
+SCALING = 8.0 / RANK   # lora_alpha=8.0, r=4 -- matches apply_dora_patching()
+                       # in torch_client.py; named since it feeds a formula
+                       # below, not just a print string.
+
+
+def dora_effective_weight(W0, B, A, m, scaling=SCALING):
+    """Mirrors DoRALinear._compute_dora_weight exactly (row-wise norm).
+    torch_client.py: combined = W0 + delta_w; return m * combined/||combined||
+    """
+    combined = W0 + scaling * (np.asarray(B) @ np.asarray(A))
+    row_norm = np.linalg.norm(combined, axis=1, keepdims=True)
+    return np.asarray(m, dtype=DTYPE)[:, np.newaxis] * (combined / row_norm)
+
+
+def run_dora_consistent_experiment():
+    """
+    Second pass, same three pipelines, DIFFERENT ground truth.
+
+    The experiment above treats magnitude and direction as independent
+    linear quantities: gt = mean_k[(B_k@A_k) * m_k] -- no base weight, no
+    normalization. Real DoRA (torch_client.py's DoRALinear) computes
+        W_k = m_k * (W0 + scaling*(B_k@A_k)) / ||W0 + scaling*(B_k@A_k)||_row
+    Normalization does not commute with averaging (mean_k[normalize(v_k)] !=
+    normalize(mean_k[v_k]) in general), so a fleet-average m calibrated
+    per-client against ||combined_k|| is not guaranteed to relate sensibly
+    to ||combined_new||. This block re-runs frozen/separate/folded against
+    a ground truth built from the REAL nonlinear formula, to check whether
+    D4's conclusion survives contact with actual training semantics.
+
+    This is NEW EVIDENCE for D4, not a re-argument of it -- per this file's
+    own header, reopening D4 requires a human decision, so this prints a
+    verdict but does not touch aggregator.py or DECISIONS.md.
+    """
+    print("\n=== DoRA-consistent (nonlinear) ground truth check ===")
+    print("(same pipelines as above; gt now includes W0 + row-wise norm)\n")
+    print(f"{'het':>5s} {'frozen':>9s} {'separate':>9s} {'folded':>9s} "
+          f"{'sep/frozen':>11s}")
+
+    W0 = np.random.default_rng(7).standard_normal((M_DIM, N_DIM)).astype(DTYPE) / np.sqrt(N_DIM)
+
+    results = []
+    for het in HET_LEVELS:
+        uploads = make_dora_clients(het)
+        weights = np.ones(N_CLIENTS)
+
+        # true nonlinear ground truth: mean of each client's REAL effective
+        # weight, i.e. what their local DoRALinear actually computes
+        gt = np.mean([dora_effective_weight(W0, u["B"], u["A"], u["m"])
+                      for u in uploads], axis=0)
+
+        # production path: direction via reconstruct->SVD, m separate --
+        # reconstruct the effective weight the same way a client would
+        B_new, A_new, m_new, _ = aggregate_module(uploads, weights, RANK)
+        est_separate = dora_effective_weight(W0, B_new, A_new, m_new)
+
+        # frozen baseline: same direction estimate, magnitude ignored (m=1) --
+        # isolates the value of magnitude tracking, holding direction fixed
+        est_frozen = dora_effective_weight(W0, B_new, A_new, np.ones(M_DIM, dtype=DTYPE))
+
+        # folded: m fused into the dense delta before aggregation/SVD, so
+        # there's no separate m left to renormalize with -- the SVD output
+        # IS the fleet's estimate of the full increment over W0
+        dense_folded = np.mean([(np.asarray(u["B"]) @ np.asarray(u["A"]))
+                                * np.asarray(u["m"])[:, np.newaxis]
+                                for u in uploads], axis=0)
+        est_folded = W0 + SCALING * svd_truncate(dense_folded, RANK)
+
+        e_frozen = rel_frobenius_error(est_frozen, gt)
+        e_separate = rel_frobenius_error(est_separate, gt)
+        e_folded = rel_frobenius_error(est_folded, gt)
+        results.append((het, e_frozen, e_separate, e_folded))
+        print(f"{het:>5.2f} {e_frozen:>9.4f} {e_separate:>9.4f} "
+              f"{e_folded:>9.4f} {e_separate / e_frozen:>11.3f}")
+
+    print("\nSame pre-registered decision rules, checked against the")
+    print("nonlinear ground truth instead of the linear proxy:")
+    het1 = next(r for r in results if r[0] == 1.0)
+    rule1 = het1[2] < 0.8 * het1[1]
+    print(f"  Rule 1 (separate beats frozen by >20% at het=1.0): "
+          f"{'PASS' if rule1 else 'FAIL -- magnitude path does not clear the bar under real DoRA semantics'}")
+    sep_wins = sum(1 for _, _, s, f in results if s < f)
+    fold_wins = sum(1 for _, _, s, f in results if f < s)
+    print(f"  Rule 2 (separate vs folded): separate wins {sep_wins}/{len(results)}, "
+          f"folded wins {fold_wins}/{len(results)}")
+    if fold_wins > sep_wins:
+        print("    -> folded is more accurate here too, but D4's reasoning for")
+        print("       keeping m first-class is architectural (client adapter")
+        print("       semantics), not purely accuracy -- still a human call.")
+    else:
+        print("    -> separate still holds up under the real nonlinear formula.")
 
 
 if __name__ == "__main__":
@@ -111,3 +203,5 @@ if __name__ == "__main__":
               "rather than auto-switching.")
     else:
         print("    -> keep separate (current aggregator default).")
+
+    run_dora_consistent_experiment()
