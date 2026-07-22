@@ -1,10 +1,21 @@
 """
 aggregator.py -- Anchor-side aggregation core for the Federated Curriculum Swarm
 =================================================================================
-(v1.1 -- performance revision after real-shape benchmark)
+(v1.2 -- rank-dispatch fix: kv=2 is now reachable)
 
 Pure tensor math, no I/O. The FastAPI/queue layers call aggregate_round() with
 already-parsed uploads. Everything here is CPU-only NumPy/scikit-learn.
+
+v1.2 changes:
+  - DEFAULT_RANK_MAP's "kv" bucket was unreachable in practice: no module
+    name used anywhere (self_attn.k_proj/v_proj, or the toy fleet's
+    attn.k_proj/v_proj) contains the literal substring "kv", so k/v
+    projections always matched "attn" instead and silently got rank 4, not
+    the rank 2 that D6's rank-starvation diagnostic actually validated.
+    Fixed by matching k_proj/v_proj on suffix before falling back to the
+    attn/mlp substring check. No wire-format or upload-schema change; only
+    affects modules with no explicit rank_map entry, which is every caller
+    today (main.py doesn't pass one).
 
 v1.1 changes (behavior-identical, benchmark-driven):
   - All dense math in float32 (DTYPE). Adapters are float16 on the wire;
@@ -67,6 +78,25 @@ DEFAULT_RANK_MAP = {"kv": 2, "attn": 4, "mlp": 6}
 RANK_STARVATION_THRESHOLD = 0.15   # trailing/top ratio (linear-sum convention;
                                     # re-tune if convention changes)
 TRIM_BEFORE_WEIGHTS = True
+
+
+def _default_target_rank(name):
+    """Fallback rank for a module with no explicit rank_map entry.
+
+    k_proj/v_proj are matched by suffix first: standard HF-style qualified
+    names (self_attn.k_proj, self_attn.v_proj) never contain the literal
+    substring "kv", so DEFAULT_RANK_MAP's "kv" entry can only be reached
+    this way. Everything else still falls back to the attn/mlp substring
+    check against DEFAULT_RANK_MAP, so the three canonical ranks (D6) stay
+    defined in one place.
+    """
+    n = name.lower()
+    if n.endswith("k_proj") or n.endswith("v_proj"):
+        return DEFAULT_RANK_MAP["kv"]
+    for key in ("attn", "mlp"):
+        if key in n:
+            return DEFAULT_RANK_MAP[key]
+    return 4
 
 
 # ------------------------------------------------------------------ weights
@@ -182,8 +212,9 @@ def aggregate_round(uploads, current_version, current_epoch, rank_map=None,
     uploads: list of dicts per adapter_schema.json:
       {device_id, fetch_version, curriculum_epoch,
        modules: {name: {"A", "B", "m"}}}
-    rank_map: module_name -> target rank. Falls back to substring matching
-      against DEFAULT_RANK_MAP ('kv'/'attn'/'mlp'), else rank 4.
+    rank_map: module_name -> target rank. Falls back to matching k_proj/
+      v_proj by suffix (DEFAULT_RANK_MAP['kv']), then 'attn'/'mlp' by
+      substring, else rank 4. See _default_target_rank.
     epoch_transition_weights: optional {(from_epoch, to_epoch): weight} soft
       map. Default None = hard rejection of epoch mismatches (conservative).
 
@@ -217,8 +248,7 @@ def aggregate_round(uploads, current_version, current_epoch, rank_map=None,
     for name in module_names:                      # streamed: one at a time
         target_rank = (rank_map or {}).get(name)
         if target_rank is None:
-            target_rank = next((r for key, r in DEFAULT_RANK_MAP.items()
-                                if key in name.lower()), 4)
+            target_rank = _default_target_rank(name)
         cohort = [u["modules"][name] for u in kept]
         B_new, A_new, m_new, mod_tel = aggregate_module(cohort, weights,
                                                         target_rank)
@@ -279,3 +309,19 @@ if __name__ == "__main__":
               f"(shared m mean was {shared['m'].mean():.3f})")
     print("\nSelf-test complete. Expect values matching v1.0 to ~float32 "
           "precision (trailing_ratio ~0.064 / ~0.067, m mean ~1.559).")
+
+    print("\n=== rank dispatch sanity check (v1.2 fix) ===")
+    for name, expected in [
+        ("model.layers.5.self_attn.k_proj", 2),   # torch_client.py naming
+        ("model.layers.5.self_attn.v_proj", 2),
+        ("model.layers.5.self_attn.q_proj", 4),
+        ("model.layers.5.self_attn.o_proj", 4),
+        ("layers.0.attn.k_proj", 2),               # toy-fleet-style naming
+        ("layers.0.attn.v_proj", 2),
+        ("layers.0.attn.q_proj", 4),               # what swairm-client uses today
+        ("model.layers.5.mlp.down_proj", 6),
+        ("model.layers.5.mlp.gate_proj", 6),
+    ]:
+        got = _default_target_rank(name)
+        status = "OK" if got == expected else "FAIL"
+        print(f"    {status}: {name:38s} -> {got} (expected {expected})")

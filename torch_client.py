@@ -216,6 +216,17 @@ async def main():
     update_event.set()
     
     round_idx = 0
+    # Real Anchor state, synced each --online round below. Previously this
+    # client uploaded fetch_version=round_idx (its own local counter, never
+    # the Anchor's actual version) and a hardcoded curriculum_epoch=1.
+    # aggregate_round() silently drops any upload whose curriculum_epoch
+    # doesn't match the Anchor's current one (no error back to the client --
+    # /upload always returns 200 regardless), so the moment a real
+    # deployment's curriculum_epoch advances past 1, every upload from this
+    # client would be discarded with no visible symptom other than the
+    # Anchor's version no longer moving.
+    current_version = 0
+    current_epoch = 1
     while True:
         # Wait for the signal from the WebSocket
         await update_event.wait()
@@ -223,11 +234,21 @@ async def main():
         
         print(f"\n--- [Round {round_idx}] Starting training cycle ---")
         
-        # Pull latest
+        # Pull latest -- also syncs current_epoch (from /status) and
+        # current_version (from the X-Adapter-Version header) so this
+        # client's next upload reports real Anchor state instead of
+        # round_idx / a hardcoded epoch.
         if args.online:
+            try:
+                status_resp = requests.get(f"{args.anchor_url}/status", timeout=10)
+                if status_resp.status_code == 200:
+                    current_epoch = status_resp.json().get("curriculum_epoch", current_epoch)
+            except Exception as e:
+                print(f"    Status fetch failed: {e}")
             try:
                 resp = requests.get(f"{args.anchor_url}/adapter/latest", timeout=10)
                 if resp.status_code == 200:
+                    current_version = int(resp.headers.get("X-Adapter-Version", current_version))
                     with io.BytesIO(resp.content) as buf, np.load(buf) as z:
                         for key in z.files:
                             if "::" not in key: continue
@@ -238,7 +259,7 @@ async def main():
                                     if part == "A": mod.lora_A.data.copy_(torch.tensor(val, device=device))
                                     elif part == "B": mod.lora_B.data.copy_(torch.tensor(val, device=device))
                                     elif part == "m": mod.magnitude.data.copy_(torch.tensor(val, device=device).unsqueeze(1))
-                    print(f"    Synced global parameters.")
+                    print(f"    Synced global parameters (v{current_version}, epoch {current_epoch}).")
             except Exception as e:
                 print(f"    Sync failed: {e}")
 
@@ -252,8 +273,8 @@ async def main():
             # Match the exact schema the server expects
             meta_data = {
                 "device_id": args.client_id,
-                "fetch_version": round_idx,
-                "curriculum_epoch": 1 
+                "fetch_version": current_version,
+                "curriculum_epoch": current_epoch
             }
             arrays = {
                 "__meta__": np.frombuffer(json.dumps(meta_data).encode(), dtype=np.uint8)
