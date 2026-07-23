@@ -85,6 +85,10 @@ QUEUE_QUARANTINE = BASE_DIR / "queue" / "quarantine"
 MODELS_DIR = BASE_DIR / "models"
 STATE_PATH = BASE_DIR / "state.json"
 AGG_INTERVAL_S = int(os.environ.get("FCS_AGG_INTERVAL_S", str(30 * 60)))        # worker drain interval (matches sim cadence)
+# Soft weight for uploads exactly one curriculum epoch behind (decision D9,
+# validate_open_configs.py: soft 0.25 beats hard rejection in every tested
+# transition regime, t=+21..+100). Older epochs remain hard-rejected.
+EPOCH_TRANSITION_WEIGHT = float(os.environ.get("FCS_EPOCH_TRANSITION_WEIGHT", "0.25"))
 META_KEYS = {"device_id", "fetch_version", "curriculum_epoch"}
 
 # --- skew-detector heuristics (UNTUNED -- revisit with real fleet data) ---
