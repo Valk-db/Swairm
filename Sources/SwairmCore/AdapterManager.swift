@@ -2,47 +2,33 @@ import Foundation
 import MLX
 import MLXNN
 import MLXLMCommon
-import ZIPFoundation
+import SwairmCore
 
-/// Manages atomic adapter replacement (D7) and DoRA magnitude parameter synchronization (D4)
-/// for the Swift client engine.
-public final class AdapterManager {
-    
+public class AdapterManager {
     public init() {}
-    
-    /// Unpacks an incoming network NPZ payload and performs an atomic full-adapter replace
-    /// across all matching DoRALinear layers in the model.
-    /// - Parameters:
-    ///   - data: Raw binary data of the `.npz` archive received from the anchor node.
-    ///   - model: The active MLX model module being fine-tuned or evaluated.
+
     public func applyRemoteAdapter(from data: Data, to model: inout some Module) throws {
-        // 1. Extract tensors from the NPZ wire payload using the existing NPY/NPZ codecs
-        let archive = try NPZArchive(data: data)
-        let tensors = try archive.extractTensors()
+        // 1. Unpack modules from the NPZ / adapter wire payload using your codec
+        let modulesMap = try AdapterCodec.unpackModules(data)
         
-        // 2. Perform atomic full-adapter replacement (D7)
-        // Iterate through named modules to locate and update DoRA layers
-        for (name, module) in model.namedModules() {
-            // Check for upstream mlx-swift-lm DoRALinear structure or custom wrapper
-            if let doraLayer = module as? DoRALinear {
-                let keyPrefix = name.isEmpty ? "" : "\(name)."
-                
-                guard let wA = tensors["\(keyPrefix)lora_a"],
-                      let wB = tensors["\(keyPrefix)lora_b"],
-                      let magnitude = tensors["\(keyPrefix)m"] else {
-                    continue
-                }
-                
-                // Atomic assignment maintaining vector shapes and precision
-                doraLayer.loraA = wA
-                doraLayer.loraB = wB
-                
-                // D4 Invariant: Magnitude vector 'm' is updated as a separate, uncoupled parameter
-                doraLayer.magnitude = magnitude
-            }
+        // 2. Build the nested parameter dictionary expected by MLX Module updates
+        var parameterUpdates: [String: Any] = [:]
+        
+        for (moduleName, adapterMod) in modulesMap {
+            // Convert Swift Data / Floats into MLXArrays with precise shapes
+            let wA = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
+            let wB = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
+            let magnitude = MLXArray(adapterMod.m, [adapterMod.m.count])
+            
+            // Map keys to match the internal @ParameterInfo keys ("lora_a", "lora_b", "m")
+            parameterUpdates[moduleName] = [
+                "lora_a": wA,
+                "lora_b": wB,
+                "m": magnitude
+            ]
         }
         
-        // Evaluate deferred computation graphs to ensure memory is committed immediately
-        eval(model.parameters())
+        // 3. Apply updates safely through MLX's reflection-safe update engine
+        model.update(parameters: parameterUpdates)
     }
 }
