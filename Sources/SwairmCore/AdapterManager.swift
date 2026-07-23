@@ -21,9 +21,9 @@ public class AdapterManager {
             
             // Wrap parameters into leaves within the nested dictionary tree
             let innerDict: [String: NestedDictionary<String, MLXArray>] = [
-                "lora_a": .leaf(wA),
-                "lora_b": .leaf(wB),
-                "m": .leaf(magnitude)
+                "lora_a": .value(wA),
+                "lora_b": .value(wB),
+                "m": .value(magnitude)
             ]
             
             rootDict[moduleName] = .dictionary(innerDict)
