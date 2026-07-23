@@ -242,10 +242,13 @@ def drain_once(state, verbose=True):
         return None
 
     skew = detect_skew(state)
+    epoch = state["curriculum_epoch"]
     result = aggregate_round(uploads,
                              current_version=state["version"],
-                             current_epoch=state["curriculum_epoch"],
-                             skew_detected=skew)
+                             current_epoch=epoch,
+                             skew_detected=skew,
+                             epoch_transition_weights={
+                                 (epoch - 1, epoch): EPOCH_TRANSITION_WEIGHT})
     if result["modules"]:
         snap = save_snapshot(result)
         state["version"] = result["version"]
