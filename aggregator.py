@@ -56,11 +56,17 @@ PIPELINE (validated in simulate_fedavg.py v2 + async_event_sim v1.1):
     coordinate-wise trimmed weighted mean        (robust reduction)
     randomized SVD -> truncate to module rank    (adaptive: kv=2, attn=4, mlp=6)
 
-OPEN ITEMS deliberately surfaced as config, not silently decided:
-  - TRIM_BEFORE_WEIGHTS: trim/weight composition order -- default trims
-    first, then weights survivors.
-  - Curriculum epoch handling: default hard rejection; soft transition-
-    weight map can be passed instead.
+FORMERLY-OPEN ITEMS, now decided by evidence (validate_open_configs.py,
+20 paired seeds on this production path -- see DECISIONS.md D8/D9):
+  - TRIM_BEFORE_WEIGHTS = True is LOCKED: trim on raw values, then weight
+    survivors. Won 20/20 paired seeds under active reciprocal weighting
+    (t=13.4). Weighting first lets down-weighted stale values masquerade
+    as extremes, trimming the wrong coordinates. Flag retained only for
+    reproducing the experiment.
+  - Curriculum epoch handling: hard rejection LOSES to soft transition
+    weights in every tested transition regime (t=+21..+100). main.py now
+    passes a one-step soft map {(epoch-1, epoch): 0.25}; older epochs are
+    still hard-rejected.
 
 Run self-test: python aggregator.py
 """
@@ -77,7 +83,8 @@ NORM_CLIP_MULT = 3.0         # reject deltas with norm > mult * median norm
 DEFAULT_RANK_MAP = {"kv": 2, "attn": 4, "mlp": 6}
 RANK_STARVATION_THRESHOLD = 0.15   # trailing/top ratio (linear-sum convention;
                                     # re-tune if convention changes)
-TRIM_BEFORE_WEIGHTS = True
+TRIM_BEFORE_WEIGHTS = True   # LOCKED (D8): 20/20 seeds, t=13.4; do not flip
+                             # without new evidence (validate_open_configs.py)
 
 
 def _default_target_rank(name):
