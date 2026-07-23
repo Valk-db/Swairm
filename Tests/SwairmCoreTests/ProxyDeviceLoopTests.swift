@@ -114,7 +114,8 @@ final class ProxyDeviceLoopTests: XCTestCase {
         XCTAssertEqual(result.fetchedVersion, 7)
         XCTAssertLessThan(result.dirErrorVsTarget, 0.9,
                           "fetched global built from the target should be close")
-        let payload = try XCTUnwrap(await anchor.uploads.first)
+        let uploads = await anchor.uploads
+        let payload = try XCTUnwrap(uploads.first)
         XCTAssertEqual(payload.fetchVersion, 7,
                        "upload must carry the fetched version for staleness tracking")
     }
@@ -136,7 +137,8 @@ final class ProxyDeviceLoopTests: XCTestCase {
             }
             lastError = result.dirErrorVsTarget
 
-            let payload = try XCTUnwrap(await anchor.uploads.last)
+            let uploads = await anchor.uploads
+            let payload = try XCTUnwrap(uploads.last)
             await anchor.setGlobal(version: round + 1, modules: payload.modules)
         }
         XCTAssertLessThan(lastError, 0.6)
