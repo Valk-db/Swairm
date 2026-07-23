@@ -10,7 +10,7 @@ public class AdapterManager {
         // 1. Unpack modules from the NPZ / adapter wire payload using your codec
         let modulesMap = try AdapterCodec.unpackModules(data)
         
-        // 2. We use a regular Swift dictionary to hold the top-level branches
+        // 2. Build the explicit NestedDictionary structure required by MLX
         var rootDict: [String: NestedDictionary<String, MLXArray>] = [:]
         
         for (moduleName, adapterMod) in modulesMap {
@@ -19,21 +19,19 @@ public class AdapterManager {
             let wB = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
             let magnitude = MLXArray(adapterMod.m, [adapterMod.m.count])
             
-            // Wrap parameters into an inner NestedDictionary using its standard dictionary initializer
-            let innerDict = NestedDictionary<String, MLXArray>([
-                "lora_a": wA,
-                "lora_b": wB,
-                "m": magnitude
-            ])
+            // Wrap parameters into leaves using the .item enum case
+            let innerDict: [String: NestedDictionary<String, MLXArray>] = [
+                "lora_a": .item(wA),
+                "lora_b": .item(wB),
+                "m": .item(magnitude)
+            ]
             
-            // Assign the branch to the root tree
-            rootDict[moduleName] = innerDict
+            rootDict[moduleName] = .dictionary(innerDict)
         }
         
-        // 3. Initialize the final ModuleParameters object from our nested tree
-        let parameterUpdates = ModuleParameters(rootDict)
+        let parameterUpdates: ModuleParameters = .dictionary(rootDict)
         
-        // 4. Apply updates safely through MLX's reflection-safe update engine
+        // 3. Apply updates safely through MLX's reflection-safe update engine
         model.update(parameters: parameterUpdates)
     }
 }
