@@ -5,7 +5,7 @@
 
 import Foundation
 
-public struct Matrix: Equatable {
+public struct Matrix: Equatable, Sendable {
     public let rows: Int
     public let cols: Int
     public var data: [Float]
