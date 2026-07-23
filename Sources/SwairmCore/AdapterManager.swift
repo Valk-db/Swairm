@@ -9,29 +9,24 @@ public class AdapterManager {
     public func applyRemoteAdapter(from data: Data, to model: inout some Module) throws {
         // 1. Unpack modules from the NPZ / adapter wire payload using your codec
         let modulesMap = try AdapterCodec.unpackModules(data)
-        
-        // 2. Build the explicit NestedItem structure required by MLX
-        var rootDict: [String: NestedItem<String, MLXArray>] = [:]
-        
+
+        // 2. Flatten into "moduleName.paramName" -> MLXArray. This mirrors what
+        //    MLXLMCommon's own LoRAContainer.from(directory:) does when it turns
+        //    a loaded adapters.safetensors dict into parameters:
+        //        let parameters = ModuleParameters.unflattened(weights)
+        //    (mlx-swift-lm: Libraries/MLXLMCommon/Adapters/LoRA/LoRAContainer.swift:128)
+        var flat: [String: MLXArray] = [:]
         for (moduleName, adapterMod) in modulesMap {
-            // Convert Swift Data / Floats into MLXArrays with precise shapes
-            let wA = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
-            let wB = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
-            let magnitude = MLXArray(adapterMod.m, [adapterMod.m.count])
-            
-            // Wrap parameters into leaves using the .item enum case
-            let innerDict: [String: NestedItem<String, MLXArray>] = [
-                "lora_a": .item(wA),
-                "lora_b": .item(wB),
-                "m": .item(magnitude)
-            ]
-            
-            rootDict[moduleName] = .dictionary(innerDict)
+            flat["\(moduleName).lora_a"] = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
+            flat["\(moduleName).lora_b"] = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
+            flat["\(moduleName).m"] = MLXArray(adapterMod.m, [adapterMod.m.count])
         }
-        
-        let parameterUpdates: ModuleParameters = .dictionary(rootDict)
-        
-        // 3. Apply updates safely through MLX's reflection-safe update engine
-        model.update(parameters: parameterUpdates)
+
+        // 3. Build the nested parameter tree and apply it. `.noUnusedKeys` makes a
+        //    moduleName/key that doesn't land anywhere in `model` throw instead of
+        //    silently no-op'ing -- worth keeping since a background adapter fetch
+        //    has no other feedback path if a path is wrong.
+        let parameterUpdates = ModuleParameters.unflattened(flat)
+        try model.update(parameters: parameterUpdates, verify: .noUnusedKeys)
     }
 }
