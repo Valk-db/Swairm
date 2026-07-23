@@ -1,0 +1,50 @@
+# XcodeGen spec for the sideloadable Swairm iOS app.
+# Generate the .xcodeproj with:  cd App && xcodegen generate
+# (brew install xcodegen). The project is NOT checked in; CI regenerates it.
+
+name: Swairm
+
+options:
+  bundleIdPrefix: com.valk
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  Swairm:
+    path: ".."   # local SwiftPM package at the repo root (SwairmCore)
+
+targets:
+  SwairmApp:
+    type: application
+    platform: iOS
+    sources:
+      - SwairmApp
+    dependencies:
+      - package: Swairm
+        product: SwairmCore
+    info:
+      path: SwairmApp/Info.plist
+      properties:
+        CFBundleDisplayName: Swairm
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Dev builds talk plain HTTP to an Anchor on the LAN.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: >-
+          Swairm connects to your FCS Anchor server on the local network
+          to fetch and upload federated training adapters.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.valk.swairm
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        # CI builds unsigned; Sideloadly re-signs with your Apple ID cert.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"

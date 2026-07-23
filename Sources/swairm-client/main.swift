@@ -3,16 +3,12 @@
 // FedAvg semantics (DECISIONS.md D7). RNG streams differ from numpy's,
 // so per-device targets are not bit-identical to the Python sim; the
 // convergence behavior and wire format are the same.
+//
+// Thin wrapper around SwairmCore.ProxyDeviceLoop — the CLI fleet, the CI
+// integration job, and the iOS app all run the same round loop.
 
 import Foundation
 import SwairmCore
-
-let mDim = 128
-let nDim = 256
-let rank = 4
-let moduleName = "layers.0.attn.q_proj"
-let clientLR: Float = 0.5
-let noiseScale: Float = 0.05
 
 // ------------------------------------------------------------------ args
 var anchor = "http://127.0.0.1:8000"
@@ -46,64 +42,39 @@ guard let baseURL = URL(string: anchor) else {
     exit(2)
 }
 
-// ------------------------------------------------------------------ targets
-struct DeviceTarget {
-    let dense: Matrix
-    let magnitude: [Float]
-}
+// ------------------------------------------------------------------ fleet
+let config = ProxyLoopConfig.standard
+let client = AnchorClient(base: baseURL)
 
-let rankScale = 1.0 / Float(Double(rank).squareRoot())
-let dimScale = 1.0 / Float(Double(nDim).squareRoot())
-
-var sharedRng = GaussianRNG(seed: 42)
-let dShared = randomNormalMatrix(rows: mDim, cols: rank, scale: rankScale, rng: &sharedRng)
-    * randomNormalMatrix(rows: rank, cols: nDim, scale: dimScale, rng: &sharedRng)
-var mShared = [Float]()
-for _ in 0..<mDim { mShared.append(sharedRng.uniform(in: 0.5, 2.5)) }
-
-var targets: [String: DeviceTarget] = [:]
-var trainers: [String: LinearProxyTrainer] = [:]
+// One persistent loop per device so its trainer's noise RNG advances
+// across rounds, like the old inline loop's per-device rng did.
+var loops: [ProxyDeviceLoop] = []
 for i in 0..<fleet {
-    var rng = GaussianRNG(seed: UInt64(1000 + i))
-    let perturb = randomNormalMatrix(rows: mDim, cols: rank, scale: rankScale, rng: &rng)
-        * randomNormalMatrix(rows: rank, cols: nDim, scale: dimScale, rng: &rng)
-    let dK = dShared + perturb.scaled(by: 0.3)
-    var mK = [Float]()
-    for j in 0..<mDim {
-        mK.append(min(3.0, max(0.1, mShared[j] + 0.2 * rng.normal())))
-    }
-    let deviceID = "dev\(i)"
-    targets[deviceID] = DeviceTarget(dense: dK, magnitude: mK)
-    // One persistent trainer per device so its noise RNG advances across
-    // rounds, like the old inline loop's per-device rng did.
-    trainers[deviceID] = LinearProxyTrainer(config: .init(
-        moduleName: moduleName, rows: mDim, cols: nDim, rank: rank,
-        learningRate: clientLR, noiseScale: noiseScale,
-        seed: UInt64(5000 + i)))
+    loops.append(ProxyDeviceLoop(anchor: client, deviceID: "dev\(i)",
+                                 deviceIndex: i, config: config))
 }
 
-var fleetDir = Matrix(rows: mDim, cols: nDim)
-var fleetM = [Float](repeating: 0, count: mDim)
-for t in targets.values {
-    fleetDir = fleetDir + t.dense
-    for j in 0..<mDim { fleetM[j] += t.magnitude[j] }
+// Fleet-average target, for the global-vs-fleet convergence metric.
+var fleetDir = Matrix(rows: config.rows, cols: config.cols)
+var fleetM = [Float](repeating: 0, count: config.rows)
+for loop in loops {
+    fleetDir = fleetDir + loop.target.dense
+    for j in 0..<config.rows { fleetM[j] += loop.target.magnitude[j] }
 }
 fleetDir = fleetDir.scaled(by: 1.0 / Float(fleet))
-for j in 0..<mDim { fleetM[j] /= Float(fleet) }
+for j in 0..<config.rows { fleetM[j] /= Float(fleet) }
 let fleetNorm = fleetDir.frobeniusNorm
 
 // ------------------------------------------------------------------ rounds
-let client = AnchorClient(base: baseURL)
-
 do {
+    let budget = ResourceBudget(maxSteps: 1, maxWallClock: 60,
+                                stopOnSeriousThermalState: false)
     for rnd in 0..<rounds {
+        // Round header: global adapter vs. fleet-average target.
         let status = try await client.status()
-
         let globalAdapter = try await client.latestAdapter()
-        let version = globalAdapter?.version ?? 0
-
-        var gDir = Matrix(rows: mDim, cols: nDim)
-        if let mod = globalAdapter?.modules[moduleName] {
+        var gDir = Matrix(rows: config.rows, cols: config.cols)
+        if let mod = globalAdapter?.modules[config.moduleName] {
             gDir = mod.B * mod.A
         }
         let err = (gDir - fleetDir).frobeniusNorm / fleetNorm
@@ -111,25 +82,10 @@ do {
             + "(epoch \(status.curriculum_epoch), skew=\(status.skew_detected)) | "
             + "global-vs-fleet-target err=" + String(format: "%.4f", err))
 
-        // Each device: prepare -> train (one proxy step) -> export -> upload,
-        // the same loop a real phone will run behind the LocalTraining seam.
-        let budget = ResourceBudget(maxSteps: 1, maxWallClock: 60,
-                                    stopOnSeriousThermalState: false)
-        for deviceID in targets.keys.sorted() {
-            let target = targets[deviceID]!
-            let trainer = trainers[deviceID]!
-
-            try await trainer.prepare(globalAdapter: globalAdapter)
-            let batch = TrainingBatch(index: rnd, data: LinearProxyBatchCodec
-                .encode(dense: target.dense, magnitude: target.magnitude))
-            _ = try await trainer.train(batches: BatchStream([batch]),
-                                        budget: budget)
-            let modules = try await trainer.exportAdapter()
-
-            try await client.upload(AdapterUploadPayload(
-                deviceID: deviceID, fetchVersion: version,
-                curriculumEpoch: status.curriculum_epoch,
-                modules: modules))
+        // Each device: fetch -> prepare -> train -> export -> upload,
+        // the same loop a real phone runs behind the LocalTraining seam.
+        for loop in loops {
+            _ = try await loop.runRound(budget: budget)
         }
         print("          uploaded \(fleet) adapters; waiting "
             + "\(Int(interval))s for the worker...")
@@ -137,11 +93,11 @@ do {
     }
 
     if let final = try await client.latestAdapter(),
-       let mod = final.modules[moduleName] {
+       let mod = final.modules[config.moduleName] {
         let gDir = mod.B * mod.A
         let err = (gDir - fleetDir).frobeniusNorm / fleetNorm
-        var mDiff = [Float](repeating: 0, count: mDim)
-        for j in 0..<mDim { mDiff[j] = mod.m[j] - fleetM[j] }
+        var mDiff = [Float](repeating: 0, count: config.rows)
+        for j in 0..<config.rows { mDiff[j] = mod.m[j] - fleetM[j] }
         let mErr = vectorNorm(mDiff) / vectorNorm(fleetM)
         print("\nFinal: dir err=" + String(format: "%.4f", err)
             + ", magnitude err=" + String(format: "%.4f", mErr)
