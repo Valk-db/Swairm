@@ -117,4 +117,99 @@ final class SwairmCoreTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(svd.S[i - 1], svd.S[i])
         }
     }
+
+    // MARK: linear-proxy trainer
+
+    func testLinearProxyBatchCodecRoundTrip() throws {
+        let dense = Matrix(rows: 3, cols: 5,
+                           data: (0..<15).map { Float($0) * 0.25 - 1 })
+        let magnitude: [Float] = [0.5, 1.5, 2.5]
+        let data = LinearProxyBatchCodec.encode(dense: dense, magnitude: magnitude)
+        let (d2, m2) = try LinearProxyBatchCodec.decode(data)
+        XCTAssertEqual(d2, dense)
+        XCTAssertEqual(m2, magnitude)
+    }
+
+    func testLinearProxyTrainerConvergesTowardTarget() async throws {
+        let rows = 16, cols = 24, rank = 4
+        var rng = GaussianRNG(seed: 3)
+        // Exactly rank-4 target so factorToRank loses nothing.
+        let target = randomNormalMatrix(rows: rows, cols: rank, scale: 0.5, rng: &rng)
+            * randomNormalMatrix(rows: rank, cols: cols, scale: 0.5, rng: &rng)
+        let targetM = (0..<rows).map { _ in rng.uniform(in: 0.5, 2.5) }
+
+        // noiseScale 0 => pure interpolation, loss must shrink by (1-lr)^k.
+        let trainer = LinearProxyTrainer(config: .init(
+            moduleName: "layers.0.attn.q_proj", rows: rows, cols: cols,
+            rank: rank, learningRate: 0.5, noiseScale: 0, seed: 9))
+        try await trainer.prepare(globalAdapter: nil)
+
+        let payload = LinearProxyBatchCodec.encode(dense: target, magnitude: targetM)
+        let batches = (0..<10).map { TrainingBatch(index: $0, data: payload) }
+        let budget = ResourceBudget(maxSteps: 100, maxWallClock: 30,
+                                    stopOnSeriousThermalState: false)
+        let report = try await trainer.train(batches: BatchStream(batches),
+                                             budget: budget)
+
+        XCTAssertEqual(report.stepsCompleted, 10)
+        XCTAssertEqual(report.termination, .exhaustedBatches)
+        let loss = try XCTUnwrap(report.finalLoss)
+        XCTAssertLessThan(loss, 2e-3, "10 halving steps should reach ~1e-3")
+
+        // Export reconstructs the direction near the target (D7 semantics).
+        let modules = try await trainer.exportAdapter()
+        let mod = try XCTUnwrap(modules["layers.0.attn.q_proj"])
+        let relErr = ((mod.B * mod.A) - target).frobeniusNorm
+            / target.frobeniusNorm
+        XCTAssertLessThan(relErr, 5e-3)
+        for j in 0..<rows {
+            XCTAssertEqual(mod.m[j], targetM[j], accuracy: 0.01)
+        }
+    }
+
+    func testLinearProxyTrainerHonorsStepBudget() async throws {
+        let trainer = LinearProxyTrainer(config: .init(
+            moduleName: "m", rows: 4, cols: 4, rank: 2,
+            learningRate: 0.5, noiseScale: 0, seed: 1))
+        try await trainer.prepare(globalAdapter: nil)
+
+        let payload = LinearProxyBatchCodec.encode(
+            dense: Matrix.identity(4), magnitude: [1, 1, 1, 1])
+        let batches = (0..<10).map { TrainingBatch(index: $0, data: payload) }
+        let report = try await trainer.train(
+            batches: BatchStream(batches),
+            budget: ResourceBudget(maxSteps: 3, maxWallClock: 30,
+                                   stopOnSeriousThermalState: false))
+        XCTAssertEqual(report.stepsCompleted, 3)
+        XCTAssertEqual(report.termination, .stepBudget)
+    }
+
+    func testLinearProxyTrainerHonorsBatteryFloor() async throws {
+        let trainer = LinearProxyTrainer(
+            config: .init(moduleName: "m", rows: 4, cols: 4, rank: 2,
+                          learningRate: 0.5, noiseScale: 0, seed: 1),
+            batteryFraction: { 0.10 })
+        try await trainer.prepare(globalAdapter: nil)
+
+        let payload = LinearProxyBatchCodec.encode(
+            dense: Matrix.identity(4), magnitude: [1, 1, 1, 1])
+        let report = try await trainer.train(
+            batches: BatchStream([TrainingBatch(index: 0, data: payload)]),
+            budget: ResourceBudget(maxSteps: 10, maxWallClock: 30,
+                                   stopOnSeriousThermalState: false,
+                                   minBatteryFraction: 0.2))
+        XCTAssertEqual(report.stepsCompleted, 0)
+        XCTAssertEqual(report.termination, .battery)
+    }
+
+    func testLinearProxyTrainerRequiresPrepare() async {
+        let trainer = LinearProxyTrainer(config: .init(
+            moduleName: "m", rows: 4, cols: 4, rank: 2))
+        do {
+            _ = try await trainer.exportAdapter()
+            XCTFail("exportAdapter before prepare must throw")
+        } catch {
+            // expected
+        }
+    }
 }

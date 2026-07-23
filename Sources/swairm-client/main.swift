@@ -50,7 +50,6 @@ guard let baseURL = URL(string: anchor) else {
 struct DeviceTarget {
     let dense: Matrix
     let magnitude: [Float]
-    var rng: GaussianRNG
 }
 
 let rankScale = 1.0 / Float(Double(rank).squareRoot())
@@ -63,6 +62,7 @@ var mShared = [Float]()
 for _ in 0..<mDim { mShared.append(sharedRng.uniform(in: 0.5, 2.5)) }
 
 var targets: [String: DeviceTarget] = [:]
+var trainers: [String: LinearProxyTrainer] = [:]
 for i in 0..<fleet {
     var rng = GaussianRNG(seed: UInt64(1000 + i))
     let perturb = randomNormalMatrix(rows: mDim, cols: rank, scale: rankScale, rng: &rng)
@@ -72,7 +72,14 @@ for i in 0..<fleet {
     for j in 0..<mDim {
         mK.append(min(3.0, max(0.1, mShared[j] + 0.2 * rng.normal())))
     }
-    targets["dev\(i)"] = DeviceTarget(dense: dK, magnitude: mK, rng: rng)
+    let deviceID = "dev\(i)"
+    targets[deviceID] = DeviceTarget(dense: dK, magnitude: mK)
+    // One persistent trainer per device so its noise RNG advances across
+    // rounds, like the old inline loop's per-device rng did.
+    trainers[deviceID] = LinearProxyTrainer(config: .init(
+        moduleName: moduleName, rows: mDim, cols: nDim, rank: rank,
+        learningRate: clientLR, noiseScale: noiseScale,
+        seed: UInt64(5000 + i)))
 }
 
 var fleetDir = Matrix(rows: mDim, cols: nDim)
@@ -92,37 +99,37 @@ do {
     for rnd in 0..<rounds {
         let status = try await client.status()
 
-        var version = 0
-        var gDir = Matrix(rows: mDim, cols: nDim)
-        var gM = [Float](repeating: 1, count: mDim)
-        if let adapter = try await client.latestAdapter(),
-           let mod = adapter.modules[moduleName] {
-            version = adapter.version
-            gDir = mod.B * mod.A
-            gM = mod.m
-        }
+        let globalAdapter = try await client.latestAdapter()
+        let version = globalAdapter?.version ?? 0
 
+        var gDir = Matrix(rows: mDim, cols: nDim)
+        if let mod = globalAdapter?.modules[moduleName] {
+            gDir = mod.B * mod.A
+        }
         let err = (gDir - fleetDir).frobeniusNorm / fleetNorm
         print("[round \(rnd)] anchor v\(status.version) "
             + "(epoch \(status.curriculum_epoch), skew=\(status.skew_detected)) | "
             + "global-vs-fleet-target err=" + String(format: "%.4f", err))
 
+        // Each device: prepare -> train (one proxy step) -> export -> upload,
+        // the same loop a real phone will run behind the LocalTraining seam.
+        let budget = ResourceBudget(maxSteps: 1, maxWallClock: 60,
+                                    stopOnSeriousThermalState: false)
         for deviceID in targets.keys.sorted() {
-            var target = targets[deviceID]!
-            let noise = randomNormalMatrix(rows: mDim, cols: nDim,
-                                           scale: noiseScale * dimScale,
-                                           rng: &target.rng)
-            let newDir = gDir + (target.dense - gDir).scaled(by: clientLR) + noise
-            let (a, b) = factorToRank(newDir, rank: rank)
-            var mNew = [Float](repeating: 0, count: mDim)
-            for j in 0..<mDim {
-                mNew[j] = gM[j] + clientLR * (target.magnitude[j] - gM[j])
-            }
+            let target = targets[deviceID]!
+            let trainer = trainers[deviceID]!
+
+            try await trainer.prepare(globalAdapter: globalAdapter)
+            let batch = TrainingBatch(index: rnd, data: LinearProxyBatchCodec
+                .encode(dense: target.dense, magnitude: target.magnitude))
+            _ = try await trainer.train(batches: BatchStream([batch]),
+                                        budget: budget)
+            let modules = try await trainer.exportAdapter()
+
             try await client.upload(AdapterUploadPayload(
                 deviceID: deviceID, fetchVersion: version,
                 curriculumEpoch: status.curriculum_epoch,
-                modules: [moduleName: AdapterModule(A: a, B: b, m: mNew)]))
-            targets[deviceID] = target      // persist advanced RNG state
+                modules: modules))
         }
         print("          uploaded \(fleet) adapters; waiting "
             + "\(Int(interval))s for the worker...")
