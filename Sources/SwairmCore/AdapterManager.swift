@@ -10,8 +10,8 @@ public class AdapterManager {
         // 1. Unpack modules from the NPZ / adapter wire payload using your codec
         let modulesMap = try AdapterCodec.unpackModules(data)
         
-        // 2. Build the explicit NestedDictionary structure required by MLX
-        var rootDict: [String: NestedDictionary<String, MLXArray>] = [:]
+        // 2. Build the explicit NestedItem structure required by MLX
+        var rootDict: [String: NestedItem<String, MLXArray>] = [:]
         
         for (moduleName, adapterMod) in modulesMap {
             // Convert Swift Data / Floats into MLXArrays with precise shapes
@@ -20,7 +20,7 @@ public class AdapterManager {
             let magnitude = MLXArray(adapterMod.m, [adapterMod.m.count])
             
             // Wrap parameters into leaves using the .item enum case
-            let innerDict: [String: NestedDictionary<String, MLXArray>] = [
+            let innerDict: [String: NestedItem<String, MLXArray>] = [
                 "lora_a": .item(wA),
                 "lora_b": .item(wB),
                 "m": .item(magnitude)
