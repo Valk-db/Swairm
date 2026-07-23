@@ -248,7 +248,19 @@ def aggregate_round(uploads, current_version, current_epoch, rank_map=None,
     weights = staleness_weights(kept, current_version, skew_detected)
     weights = weights * np.array(epoch_w, dtype=DTYPE)
 
-    module_names = list(kept[0]["modules"].keys())
+    # Union of module names across kept uploads, first-seen order. Uploads
+    # may carry heterogeneous module sets (mixed client naming during a
+    # rollout, partial uploads, stale queue files); each module aggregates
+    # over only the uploads that contain it, with matching weight subset.
+    # Previously this took kept[0]'s module list and indexed every upload
+    # with it -- a single upload with a different module set crashed the
+    # whole round with KeyError.
+    module_names = []
+    for u in kept:
+        for name in u["modules"]:
+            if name not in module_names:
+                module_names.append(name)
+
     new_modules, telemetry = {}, {"epoch_rejected": n_epoch_rejected,
                                   "skew_detected": skew_detected,
                                   "modules": {}}
@@ -256,9 +268,16 @@ def aggregate_round(uploads, current_version, current_epoch, rank_map=None,
         target_rank = (rank_map or {}).get(name)
         if target_rank is None:
             target_rank = _default_target_rank(name)
-        cohort = [u["modules"][name] for u in kept]
-        B_new, A_new, m_new, mod_tel = aggregate_module(cohort, weights,
-                                                        target_rank)
+        idx = [i for i, u in enumerate(kept) if name in u["modules"]]
+        cohort = [kept[i]["modules"][name] for i in idx]
+        try:
+            B_new, A_new, m_new, mod_tel = aggregate_module(
+                cohort, weights[idx], target_rank)
+        except Exception as exc:              # e.g. shape mismatch in cohort
+            telemetry["modules"][name] = {"error": str(exc),
+                                          "aggregated": 0,
+                                          "cohort_size": len(cohort)}
+            continue
         if B_new is not None:
             new_modules[name] = {"B": B_new, "A": A_new, "m": m_new}
         telemetry["modules"][name] = mod_tel
