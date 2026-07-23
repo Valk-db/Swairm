@@ -45,7 +45,7 @@ public enum NPZ {
     }
 }
 
-public struct AdapterModule {
+public struct AdapterModule: Sendable {
     public var A: Matrix
     public var B: Matrix
     public var m: [Float]
