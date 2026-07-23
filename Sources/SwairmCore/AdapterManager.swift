@@ -2,7 +2,6 @@ import Foundation
 import MLX
 import MLXNN
 import MLXLMCommon
-import SwairmCore
 
 public class AdapterManager {
     public init() {}
@@ -11,8 +10,8 @@ public class AdapterManager {
         // 1. Unpack modules from the NPZ / adapter wire payload using your codec
         let modulesMap = try AdapterCodec.unpackModules(data)
         
-        // 2. Build the nested parameter dictionary expected by MLX Module updates
-        var parameterUpdates: [String: Any] = [:]
+        // 2. Build the strictly typed nested dictionary expected by MLX Module updates
+        var parameterUpdates: [String: [String: MLXArray]] = [:]
         
         for (moduleName, adapterMod) in modulesMap {
             // Convert Swift Data / Floats into MLXArrays with precise shapes
