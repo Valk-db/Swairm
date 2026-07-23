@@ -1,14 +1,18 @@
-// Synchronous HTTP client for the FCS Anchor. Endpoints pinned by main.py:
+// Async HTTP client for the FCS Anchor. Endpoints pinned by main.py:
 //   GET  /status          -> JSON status
 //   GET  /adapter/latest  -> npz bytes + X-Adapter-Version header (404 = none yet)
 //   POST /upload          -> raw npz body, no parsing server-side
+//
+// Fully non-blocking (no semaphores): safe from UI code and iOS background
+// task runners. Conforms to AnchorConnecting so orchestration and tests can
+// substitute mock transports.
 
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-public struct AnchorStatus: Codable {
+public struct AnchorStatus: Codable, Sendable {
     public let version: Int
     public let curriculum_epoch: Int
     public let rounds: Int
@@ -21,9 +25,11 @@ public enum AnchorClientError: Error {
     case transport(Error)
     case noResponse
     case httpStatus(Int)
+    /// The Anchor does not expose this endpoint yet (e.g. curriculum download).
+    case unsupported(String)
 }
 
-public final class AnchorClient {
+public final class AnchorClient: AnchorConnecting {
     public let base: URL
     private let session: URLSession
 
@@ -34,8 +40,8 @@ public final class AnchorClient {
         self.session = URLSession(configuration: cfg)
     }
 
-    public func status() throws -> AnchorStatus {
-        let (data, http) = try request(path: "/status", method: "GET", body: nil)
+    public func status() async throws -> AnchorStatus {
+        let (data, http) = try await request(path: "/status", method: "GET", body: nil)
         guard http.statusCode == 200 else {
             throw AnchorClientError.httpStatus(http.statusCode)
         }
@@ -43,27 +49,47 @@ public final class AnchorClient {
     }
 
     /// Returns nil when the Anchor has no global adapter yet (HTTP 404).
-    public func latestAdapter() throws -> (version: Int, modules: [String: AdapterModule])? {
-        let (data, http) = try request(path: "/adapter/latest", method: "GET", body: nil)
+    public func latestAdapter() async throws -> FetchedAdapter? {
+        let (data, http) = try await request(path: "/adapter/latest", method: "GET", body: nil)
         if http.statusCode == 404 { return nil }
         guard http.statusCode == 200 else {
             throw AnchorClientError.httpStatus(http.statusCode)
         }
         let version = Int(headerValue("X-Adapter-Version", in: http) ?? "0") ?? 0
-        return (version, try AdapterCodec.unpackModules(data))
+        return FetchedAdapter(version: version,
+                              modules: try AdapterCodec.unpackModules(data))
     }
 
     @discardableResult
-    public func upload(_ raw: Data) throws -> String {
-        let (data, http) = try request(path: "/upload", method: "POST", body: raw)
+    public func upload(_ payload: AdapterUploadPayload) async throws -> UploadReceipt {
+        let raw = try AdapterCodec.packUpload(
+            deviceID: payload.deviceID,
+            fetchVersion: payload.fetchVersion,
+            curriculumEpoch: payload.curriculumEpoch,
+            modules: payload.modules)
+        return try await uploadRaw(raw)
+    }
+
+    /// Escape hatch for callers that already hold packed npz wire bytes.
+    @discardableResult
+    public func uploadRaw(_ raw: Data) async throws -> UploadReceipt {
+        let (data, http) = try await request(path: "/upload", method: "POST", body: raw)
         guard http.statusCode == 200 else {
             throw AnchorClientError.httpStatus(http.statusCode)
         }
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let queued = obj["queued"] as? String {
-            return queued
+            return UploadReceipt(queuedID: queued)
         }
-        return ""
+        return UploadReceipt(queuedID: "")
+    }
+
+    /// The Anchor (main.py) does not serve curriculum data yet; the protocol
+    /// reserves the slot so orchestration code can be written against it now.
+    @discardableResult
+    public func downloadCurriculum(epoch: Int, to destination: URL) async throws -> CurriculumManifest {
+        throw AnchorClientError.unsupported(
+            "the Anchor exposes no curriculum endpoint yet (epoch \(epoch))")
     }
 
     // ------------------------------------------------------------- internals
@@ -75,7 +101,7 @@ public final class AnchorClient {
     }
 
     private func request(path: String, method: String,
-                         body: Data?) throws -> (Data, HTTPURLResponse) {
+                         body: Data?) async throws -> (Data, HTTPURLResponse) {
         guard let url = makeURL(path) else {
             throw AnchorClientError.invalidURL(base.absoluteString + path)
         }
@@ -85,23 +111,26 @@ public final class AnchorClient {
             req.httpBody = body
             req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         }
-        return try perform(req)
+        return try await perform(req)
     }
 
-    private func perform(_ req: URLRequest) throws -> (Data, HTTPURLResponse) {
-        var out: (Data?, URLResponse?, Error?) = (nil, nil, nil)
-        let sem = DispatchSemaphore(value: 0)
-        let task = session.dataTask(with: req) { data, resp, err in
-            out = (data, resp, err)
-            sem.signal()
+    /// Continuation-based bridge over dataTask: non-blocking and portable
+    /// across Darwin Foundation and swift-corelibs FoundationNetworking.
+    private func perform(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        try await withCheckedThrowingContinuation { continuation in
+            let task = session.dataTask(with: req) { data, resp, err in
+                if let err = err {
+                    continuation.resume(throwing: AnchorClientError.transport(err))
+                    return
+                }
+                guard let http = resp as? HTTPURLResponse else {
+                    continuation.resume(throwing: AnchorClientError.noResponse)
+                    return
+                }
+                continuation.resume(returning: (data ?? Data(), http))
+            }
+            task.resume()
         }
-        task.resume()
-        sem.wait()
-        if let err = out.2 { throw AnchorClientError.transport(err) }
-        guard let http = out.1 as? HTTPURLResponse else {
-            throw AnchorClientError.noResponse
-        }
-        return (out.0 ?? Data(), http)
     }
 
     private func headerValue(_ name: String, in resp: HTTPURLResponse) -> String? {
@@ -113,3 +142,7 @@ public final class AnchorClient {
         return nil
     }
 }
+
+extension AnchorClient: @unchecked Sendable {}
+// @unchecked justification: all stored properties (base, session) are `let`
+// and URLSession is itself thread-safe; the class holds no mutable state.

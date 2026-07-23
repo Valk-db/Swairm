@@ -90,12 +90,12 @@ let client = AnchorClient(base: baseURL)
 
 do {
     for rnd in 0..<rounds {
-        let status = try client.status()
+        let status = try await client.status()
 
         var version = 0
         var gDir = Matrix(rows: mDim, cols: nDim)
         var gM = [Float](repeating: 1, count: mDim)
-        if let adapter = try client.latestAdapter(),
+        if let adapter = try await client.latestAdapter(),
            let mod = adapter.modules[moduleName] {
             version = adapter.version
             gDir = mod.B * mod.A
@@ -118,19 +118,18 @@ do {
             for j in 0..<mDim {
                 mNew[j] = gM[j] + clientLR * (target.magnitude[j] - gM[j])
             }
-            let raw = try AdapterCodec.packUpload(
+            try await client.upload(AdapterUploadPayload(
                 deviceID: deviceID, fetchVersion: version,
                 curriculumEpoch: status.curriculum_epoch,
-                modules: [moduleName: AdapterModule(A: a, B: b, m: mNew)])
-            try client.upload(raw)
+                modules: [moduleName: AdapterModule(A: a, B: b, m: mNew)]))
             targets[deviceID] = target      // persist advanced RNG state
         }
         print("          uploaded \(fleet) adapters; waiting "
             + "\(Int(interval))s for the worker...")
-        Thread.sleep(forTimeInterval: interval)
+        try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
     }
 
-    if let final = try client.latestAdapter(),
+    if let final = try await client.latestAdapter(),
        let mod = final.modules[moduleName] {
         let gDir = mod.B * mod.A
         let err = (gDir - fleetDir).frobeniusNorm / fleetNorm
