@@ -17,8 +17,9 @@ rotated-subspace clients, naive stuck at 0.7071 regardless of target rank
 - Detected participation skew -> reciprocal 1/(1+s). Evidence: won 15/15
   fresh seeds (57-71), paired t=6.07, mean gap 0.145 (~32% error reduction).
   (followup confirmation run)
-- Skew detection not yet wired: detect_skew() in main.py is a stub
-  returning False. Next telemetry task.
+- Skew detection wired in main.py v1.2: device-composition Jaccard between
+  night and day windows (volume alone can't distinguish balanced-but-diurnal
+  from demographic skew). Thresholds are heuristics pending real fleet data.
 
 ## D3. Agreement/relevance weighting: PARKED
 Three reasons, all measured: (1) cluster-weight asymmetry with direction
@@ -55,10 +56,23 @@ dir err 1.0 -> 0.0839 (noise floor), magnitude err 0.0064, monotonic
 convergence, no oscillation. Revisit only if delta-accumulation semantics
 are needed for real MLX training.
 
+## D8. Trim/weight composition order: TRIM_BEFORE_WEIGHTS = True, LOCKED
+Trim on raw values first, then weight survivors. Won 20/20 paired seeds
+under active reciprocal weighting (paired t=13.4). Weighting first lets
+down-weighted stale values masquerade as extremes, trimming the wrong
+coordinates. Flag retained in aggregator.py only for reproducing the
+experiment. (validate_open_configs.py, exp 1)
+
+## D9. Curriculum-epoch handling: soft one-step transition weight 0.25
+Hard rejection LOSES to soft transition weights in every tested regime
+(shift 0.3/1.0 x n_current 2/4/8, t=+21..+100). main.py passes a one-step
+soft map {(epoch-1, epoch): EPOCH_TRANSITION_WEIGHT=0.25}; epochs older
+than one step remain hard-rejected. Env override:
+FCS_EPOCH_TRANSITION_WEIGHT. (validate_open_configs.py, exp 2)
+
 ## Open items (deliberately not decided)
-- Trim-before-weights vs weights-before-trim (config: TRIM_BEFORE_WEIGHTS)
-- Hard vs soft curriculum-epoch rejection (config: epoch_transition_weights)
-- detect_skew() wiring (Circadian per-hour participation baseline)
+- detect_skew() thresholds (SKEW_* in main.py) -- heuristics untuned
+  until real fleet participation data exists
 - state.json -> SQLite upgrade trigger (multi-writer or >dozen devices)
 - Convex-proxy caveat: all simulation evidence assumes a linear training
   proxy; real MLX fine-tuning may punish staleness differently. Only real

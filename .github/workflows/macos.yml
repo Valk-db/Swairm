@@ -34,6 +34,14 @@ jobs:
       - name: Install Anchor dependencies
         run: pip install numpy scikit-learn fastapi uvicorn
 
+      # Exercises the full worker path (enqueue -> drain_once -> aggregate ->
+      # snapshot) without HTTP. Catches worker-side errors (e.g. NameError in
+      # drain_once) that otherwise only surface as silently stalled rounds.
+      - name: Anchor self-test (worker path)
+        run: |
+          python main.py --selftest
+          rm -rf queue models state.json
+
       - name: Start Anchor (fast aggregation interval)
         run: |
           FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
