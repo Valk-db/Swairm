@@ -131,7 +131,7 @@ public struct ResourceBudget: Sendable {
     }
 }
 
-public enum TerminationReason: Sendable {
+public enum TerminationReason: Sendable, Equatable {
     /// All provided batches were consumed.
     case exhaustedBatches
     case stepBudget
