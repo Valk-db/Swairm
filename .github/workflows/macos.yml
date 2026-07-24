@@ -124,8 +124,8 @@ jobs:
           sleep 3
           curl -sf http://127.0.0.1:8000/status
 
-      # mlx-swift 0.10.0's SwiftPM build never compiles the Metal kernels into
-      # a metallib (its only build plugin is CUDA-only), so MLX's Metal backend
+      # mlx-swift's SwiftPM build never compiles the Metal kernels into a
+      # metallib (its only build plugin is CUDA-only), so MLX's Metal backend
       # cannot find its library for a bare `swift run` executable. Reproduce
       # upstream mlx's CMake recipe: compile each kernel .metal to .air with
       # `xcrun metal`, link with `xcrun metallib`, then drop it next to the
@@ -133,40 +133,49 @@ jobs:
       # mlx/backend/metal/device.h) resolves <dir-of-that-binary>/mlx.metallib:
       # it dladdr()s an inline header function so the directory is wherever the
       # Cmlx-containing image sits (the swift-run bin dir for debug builds),
-      # and the filename is lib_name("mlx") + ".metallib". Kernel set matches
-      # the vendored mlx SHA bf7cd299's kernels/CMakeLists.txt: the 17 named
-      # kernels + steel gemm.
+      # and the filename is lib_name("mlx") + ".metallib".
+      #
+      # NOTE on kernel set: Package.swift declares `from: "0.10.0"`, but
+      # SwiftPM `from:` on a 0.x allows any <1.0.0, so the resolver picks the
+      # LATEST mlx-swift (0.31.6 at time of writing) -- whose vendored mlx
+      # kernel set differs completely from 0.10.0's (no gather.metal/
+      # scatter.metal; adds rms_norm/sdpa/fft/ternary/steel-conv/steel-attn).
+      # So DON'T hard-code a kernel list: glob every *.metal on disk and
+      # compile it, mirroring upstream's CMake unconditional set. The only
+      # on-disk kernels upstream gates out are:
+      #   - fence.metal          (MLX_METAL_VERSION >= 320 only)
+      #   - *_nax.metal (6 files)(Metal-4 AND macOS SDK >= 26.2 only; runner
+      #                          SDK is 26.0, and MLX_METAL_NO_NAX is defined)
+      # Globbing what's actually on disk makes this robust to future 0.x
+      # drift. Flags match the SHA's kernels/CMakeLists.txt METAL_FLAGS.
       - name: Build MLX metallib from vendored kernels
         run: |
           set -e
           swift build
-          # Locate the vendored mlx source root and kernels dir on disk rather
+          # Resolve the vendored mlx source root and kernels dir on disk rather
           # than hard-coding a path -- the checkout layout (submodule/symlink)
-          # differs from upstream's repo layout, so resolve it dynamically and
-          # print it for diagnosis.
+          # differs from upstream's repo layout.
           KDIR=$(find .build/checkouts/mlx-swift -type d -path '*backend/metal/kernels' | head -1)
           echo "kernels dir: $KDIR"
           MLX_DIR=$(dirname "$(dirname "$(dirname "$(dirname "$KDIR")")")")
           echo "include root (-I): $MLX_DIR"
-          echo "=== kernels dir contents (*.metal) ==="
-          ls -1 "$KDIR"/*.metal
-          echo "=== steel gemm kernels ==="
-          ls -1 "$KDIR"/steel/gemm/kernels/*.metal
           AIRS=$(mktemp -d)
-          for k in arange arg_reduce binary binary_two conv copy gemv \
-                   quantized random reduce rope scan softmax sort unary \
-                   gather scatter; do
-            src="$KDIR/$k.metal"
-            if [ ! -f "$src" ]; then echo "MISSING: $src"; exit 1; fi
-            xcrun -sdk macosx metal -Wall -Wextra -fno-fast-math \
-              -c "$src" -I"$MLX_DIR" -o "$AIRS/$k.air"
-          done
-          for f in "$KDIR"/steel/gemm/kernels/*.metal; do
-            name=$(basename "$f" .metal)
-            xcrun -sdk macosx metal -Wall -Wextra -fno-fast-math \
-              -c "$f" -I"$MLX_DIR" -o "$AIRS/$name.air"
-          done
-          echo "=== compiled .air files ==="
+          # Compile every *.metal under the kernels tree except the gated-out
+          # fence.metal and *_nax.metal (see comment above). -x metal forces
+          # Metal-source language; the two -Wno-c++XX-extensions match upstream
+          # METAL_FLAGS so newer headers that use c++17/20 extensions compile.
+          n=0
+          while IFS= read -r f; do
+            base=$(basename "$f" .metal)
+            case "$base" in
+              fence|*_nax) echo "skip (gated): $base"; continue ;;
+            esac
+            xcrun -sdk macosx metal -x metal -Wall -Wextra -fno-fast-math \
+              -Wno-c++17-extensions -Wno-c++20-extensions \
+              -c "$f" -I"$MLX_DIR" -o "$AIRS/$base.air"
+            n=$((n+1))
+          done < <(find "$KDIR" -name '*.metal' | sort)
+          echo "=== compiled $n .air files ==="
           ls -1 "$AIRS"/*.air
           BINDIR=$(swift build --show-bin-path)
           xcrun -sdk macosx metallib "$AIRS"/*.air -o "$BINDIR/mlx.metallib"
