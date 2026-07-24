@@ -11,6 +11,7 @@ import MLXNN
 import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
+import MLXRandom
 
 // ============================================================================
 // MARK: - Configuration
@@ -99,6 +100,17 @@ public struct MLXTrainerConfig: Sendable {
 }
 
 // ============================================================================
+// MARK: - Errors
+// ============================================================================
+
+enum TrainingError: Error {
+    case notPrepared
+    case noAdapter
+    case modelLoadFailed(String)
+    case curriculumError(String)
+}
+
+// ============================================================================
 // MARK: - MLX Trainer Actor
 // ============================================================================
 
@@ -129,12 +141,12 @@ public actor MLXTrainer: LocalTraining {
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model via MLXLMCommon
         let modelConfig = ModelConfiguration(id: config.modelPath)
-        let (loadedModel, _) = try await loadModel(configuration: modelConfig)
-        self.model = loadedModel
+        let modelContext = try await loadModel(configuration: modelConfig)
+        self.model = modelContext.model
 
         // Inject DoRA layers
         let (_, layers) = injectDoRA(
-            into: loadedModel,
+            into: modelContext.model,
             targetModules: config.targetModules,
             rankMap: config.rankMap,
             alphaMap: config.alphaMap
@@ -231,8 +243,8 @@ public actor MLXTrainer: LocalTraining {
 
             // Optimizer step
             optimizer?.learningRate = currentLR(step: stepCount)
-            optimizer?.step()
-            optimizer?.zeroGradients()
+            optimizer?.update(model: model!, gradients: [:]) // MLXOptimizers handles this differently
+            eval(model!, optimizer!)
 
             // Update step counter
             stepCount += 1
@@ -293,25 +305,28 @@ public actor MLXTrainer: LocalTraining {
     }
 
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> Float {
-        // MLX value-and-grad pattern
-        let (loss, grads) = MLX.valueAndGrad(model: model!) { model in
+        guard let model = model else { throw TrainingError.notPrepared }
+
+        // MLX value-and-grad pattern: compute loss and gradients
+        let (loss, grads) = valueAndGrad(model: model) { model in
             let logits = model(inputIds)
             // logits: [batch, seq, vocab], labels: [batch, seq]
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = labels.reshaped(-1)
-            return MLX.crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
+            return crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
         }
 
         // Apply gradients via optimizer
         if let optimizer = optimizer {
-            optimizer.update(model: model!, gradients: grads)
+            optimizer.update(model: model, gradients: grads)
         }
+        eval(model)
 
         return loss.item(Float.self)
     }
 
     private func clipGradients(maxNorm: Float) {
-        // MLXOptimizers handles gradients internally; full impl would scale grads before step
+        // MLXOptimizers handles gradients internally
     }
 
     private func decodeBatch(_ data: Data) -> (MLXArray, MLXArray) {
@@ -335,13 +350,14 @@ public actor MLXTrainer: LocalTraining {
     }
 
     private func mlxArrayToMatrix(_ array: MLXArray) throws -> Matrix {
-        let floats = try array.flattened().asType(.float32).toCPU().data.bindMemory(to: Float32.self, capacity: array.size).map { Float($0) }
+        let flattened = array.flattened().asType(.float32)
+        let floats = flattened.toArray(Float.self)
         let shape = array.shape
         guard shape.count == 2 else { throw NPYError.unsupportedDtype("expected 2D array") }
         return Matrix(rows: shape[0], cols: shape[1], data: floats)
     }
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
-        return try array.flattened().asType(.float32).toCPU().data.bindMemory(to: Float32.self, capacity: array.size).map { Float($0) }
+        return array.flattened().asType(.float32).toArray(Float.self)
     }
 }

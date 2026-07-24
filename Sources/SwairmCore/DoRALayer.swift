@@ -5,6 +5,7 @@
 import Foundation
 import MLX
 import MLXNN
+import MLXRandom
 
 /// DoRA-wrapped linear layer. Base weight is frozen; only LoRA params train.
 public final class DoRALinear: Module, @unchecked Sendable {
@@ -32,13 +33,13 @@ public final class DoRALinear: Module, @unchecked Sendable {
 
         // LoRA A: Kaiming uniform init
         let bound = sqrt(5.0 / Float(inFeatures))
-        self.loraA = MLX.randomUniform(-bound, bound, [rank, inFeatures])
+        self.loraA = MLXRandom.uniform(-bound, bound, [rank, inFeatures])
 
         // LoRA B: zeros
-        self.loraB = MLX.zeros([outFeatures, rank])
+        self.loraB = MLXArray.zeros([outFeatures, rank])
 
         // Magnitude: L2 norm of base weight rows
-        self.magnitude = MLX.sqrt(MLX.sum(baseWeight * baseWeight, axis: 1))
+        self.magnitude = sqrt(sum(baseWeight * baseWeight, axis: 1))
 
         super.init()
     }
@@ -46,22 +47,27 @@ public final class DoRALinear: Module, @unchecked Sendable {
     /// Forward pass: DoRA reparameterization.
     /// weight = magnitude * (baseWeight + scaling * loraB @ loraA) / ||baseWeight + scaling * loraB @ loraA||
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        // Delta weight: scaling * B @ A  [out, in]
-        let deltaW = (loraB * scaling) @ loraA
+        // Delta weight: scaling * B @ A  [out_features, in_features]
+        let deltaW = matmul(loraB, loraA) * scaling
 
         // Combined weight
         let combined = baseWeight + deltaW
 
         // Row-wise L2 norm
-        let norms = MLX.sqrt(MLX.sum(combined * combined, axis: 1))  // [out]
+        let norms = sqrt(sum(combined * combined, axis: 1))
 
         // Direction vectors (normalized rows)
-        let direction = combined / norms.expandedDimensions(axis: 1)  // [out, in]
+        let direction = combined / norms.reshaped(-1, 1)
 
         // Scale by learned magnitude
-        let weight = magnitude.expandedDimensions(axis: 1) * direction  // [out, in]
+        let weight = direction * magnitude.reshaped(-1, 1)
 
-        return x @ weight.T + (baseBias ?? MLX.zeros([weight.shape[0]]))
+        // Linear: x @ weight.T + bias
+        var out = matmul(x, weight.transposed(0, 1))
+        if let bias = baseBias {
+            out = out + bias
+        }
+        return out
     }
 
     /// Export adapter parameters for wire format (AdapterModule).
@@ -104,7 +110,8 @@ public func injectDoRA(
     var matches: [(module: Module, name: String, fullPath: String, pattern: String)] = []
 
     func collect(_ module: Module, path: String = "") {
-        for (name, child) in module.children {
+        let children = module.children
+        for (name, child) in children {
             let fullPath = path.isEmpty ? name : "\(path).\(name)"
             if let linear = child as? Linear {
                 for pattern in targetModules {
@@ -123,12 +130,16 @@ public func injectDoRA(
 
     // Replace collected matches
     for (parent, name, fullPath, pattern) in matches {
-        guard let linear = parent.children[name] as? Linear else { continue }
+        let children = parent.children
+        guard let linear = children[name] as? Linear else { continue }
         let rank = rankMap[pattern] ?? 4
         let alpha = alphaMap[pattern] ?? 16.0
         let dora = DoRALinear(base: linear, rank: rank, alpha: alpha)
         doraLayers[fullPath] = dora
-        parent.update(child: dora, forKey: name)
+        // Update module by replacing the child
+        var newChildren = children
+        newChildren[name] = dora
+        _ = parent.update(modules: newChildren)
     }
 
     return (model, doraLayers)
