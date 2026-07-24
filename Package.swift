@@ -9,7 +9,8 @@ let package = Package(
     ],
     products: [
         .library(name: "SwairmCore", targets: ["SwairmCore"]),
-        .executable(name: "swairm-client", targets: ["swairm-client"])
+        .executable(name: "swairm-client", targets: ["swairm-client"]),
+        .executable(name: "swairm-mlx-client", targets: ["swairm-mlx-client"])
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.10.0"),
@@ -32,6 +33,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "swairm-client",
+            dependencies: ["SwairmCore"]
+        ),
+        .executableTarget(
+            name: "swairm-mlx-client",
             dependencies: ["SwairmCore"]
         ),
         .testTarget(
