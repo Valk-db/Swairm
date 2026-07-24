@@ -32,10 +32,10 @@ public final class DoRALinear: Module, @unchecked Sendable {
 
         // LoRA A: Kaiming uniform init
         let bound = sqrt(5.0 / Float(inFeatures))
-        self.loraA = MLXArray.uniform(-bound, bound, [rank, inFeatures])
+        self.loraA = MLX.uniform(low: -bound, high: bound, [rank, inFeatures])
 
         // LoRA B: zeros
-        self.loraB = MLXArray.zeros([outFeatures, rank])
+        self.loraB = MLX.zeros([outFeatures, rank])
 
         // Magnitude: L2 norm of base weight rows
         self.magnitude = sqrt(sum(baseWeight * baseWeight, axis: 1))
