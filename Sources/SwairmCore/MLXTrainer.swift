@@ -154,6 +154,29 @@ public struct MLXTrainerConfig: Sendable {
         }
         return 16.0 // fallback
     }
+
+    /// Single rank/scale for the whole LoRAContainer.
+    ///
+    /// mlx-swift-lm 3.31.3's LoRAContainer applies ONE rank and ONE scale to
+    /// every matched key (see createReplacementLayer: each target layer gets
+    /// `loraParameters.rank` / `.scale`). It cannot express per-module ranks,
+    /// so D6's kv=2/attn=4/mlp=6 split is enforced Anchor-side at aggregation
+    /// (aggregate_module truncates each module to its D6 rank via SVD). The
+    /// client's job is to emit a consistent, explicit rank -- not to silently
+    /// collapse a heterogeneous map to its max. Throws when the resolved
+    /// ranks/scales disagree across target modules.
+    func resolvedRankScale() throws -> (rank: Int, scale: Float) {
+        let ranks = Set(targetModules.map { rank(for: $0) })
+        let scales = Set(targetModules.map { alpha(for: $0) })
+        guard ranks.count <= 1, scales.count <= 1 else {
+            throw TrainingError.ambiguousAdapterConfig(
+                "LoRAContainer takes one rank/scale for all target modules, but "
+                + "targetModules \(targetModules) resolve to ranks \(ranks) / "
+                + "scales \(scales). Per-module ranks (D6) are applied "
+                + "Anchor-side at aggregation, not on-device.")
+        }
+        return (ranks.first ?? 4, scales.first ?? 16.0)
+    }
 }
 
 // ============================================================================
@@ -165,6 +188,9 @@ enum TrainingError: Error {
     case noAdapter
     case modelLoadFailed(String)
     case curriculumError(String)
+    /// rankMap/alphaMap disagree across the target modules, but LoRAContainer
+    /// applies one rank/scale to all of them -- refusing to pick silently.
+    case ambiguousAdapterConfig(String)
 }
 
 // ============================================================================
@@ -197,7 +223,6 @@ public actor MLXTrainer: LocalTraining {
     /// Load base model, inject DoRA layers via MLX LoRAContainer, apply global adapter if provided.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model from local directory via MLXLMCommon
-        // Load base model from local directory via MLXLMCommon
         let modelDirectory = URL(fileURLWithPath: config.modelPath)
         let loadedModel: any LanguageModel = try await {
             let context = try await loadModel(
@@ -208,13 +233,23 @@ public actor MLXTrainer: LocalTraining {
         }()
         self.model = loadedModel
 
+        // Single rank/scale for the container (see resolvedRankScale): throws
+        // rather than silently collapsing a heterogeneous rankMap to its max.
+        let (rank, scale) = try config.resolvedRankScale()
+
+        // Adapt every transformer block the model exposes, not a hardcoded
+        // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
+        // true layer count adapts all blocks. Falls back to all layers when
+        // the model doesn't report a LoRAModel layer list.
+        let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
+
         // Create LoRAConfiguration for DoRA
         let loraConfig = LoRAConfiguration(
-            numLayers: 32,
+            numLayers: numLayers,
             fineTuneType: .dora,
             loraParameters: LoRAConfiguration.LoRAParameters(
-                rank: config.targetModules.count > 0 ? config.rankMap.values.max() ?? 4 : 4,
-                scale: config.alphaMap.values.max() ?? 16.0,
+                rank: rank,
+                scale: scale,
                 keys: config.targetModules.isEmpty ? nil : config.targetModules
             )
         )
