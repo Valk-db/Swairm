@@ -140,8 +140,8 @@ public actor MLXTrainer: LocalTraining {
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model via MLXLMCommon
         let modelConfig = ModelConfiguration(id: config.modelPath)
-        let downloader = DefaultDownloader()
-        let tokenizerLoader = DefaultTokenizerLoader()
+        let downloader = HTTPDownloader()
+        let tokenizerLoader = AutoTokenizerLoader()
         let modelContext = try await loadModel(
             from: downloader,
             using: tokenizerLoader,
@@ -241,15 +241,17 @@ public actor MLXTrainer: LocalTraining {
             let (inputIds, labels) = decodeBatch(batch.data)
 
             // Forward + backward pass
-            let loss = try await forwardBackward(inputIds: inputIds, labels: labels)
+            let (loss, grads) = try await forwardBackward(inputIds: inputIds, labels: labels)
 
             // Gradient clipping
             clipGradients(maxNorm: config.maxGradNorm)
 
             // Optimizer step
             optimizer?.learningRate = currentLR(step: stepCount)
-            optimizer?.update(model: model!, gradients: [:]) // MLXOptimizers handles this differently
-            eval(model!, optimizer!)
+            if let grads = grads {
+                optimizer?.update(model: model!, gradients: grads)
+            }
+            model!.eval()
 
             // Update step counter
             stepCount += 1
@@ -309,11 +311,11 @@ public actor MLXTrainer: LocalTraining {
         }
     }
 
-    private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> Float {
+    private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
         guard let model = model else { throw TrainingError.notPrepared }
 
         // MLX value-and-grad pattern: compute loss and gradients
-        let (loss, grads) = valueAndGrad(model: model) { model, inputIds, labels in
+        let (loss, grads) = valueAndGrad(model: model) { model in
             let logits = model(inputIds)
             // logits: [batch, seq, vocab], labels: [batch, seq]
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
@@ -325,9 +327,9 @@ public actor MLXTrainer: LocalTraining {
         if let optimizer = optimizer {
             optimizer.update(model: model, gradients: grads)
         }
-        eval(model)
+        model.eval()
 
-        return loss.item(Float.self)
+        return (loss.item(Float.self), grads)
     }
 
     private func clipGradients(maxNorm: Float) {
@@ -356,13 +358,13 @@ public actor MLXTrainer: LocalTraining {
 
     private func mlxArrayToMatrix(_ array: MLXArray) throws -> Matrix {
         let flattened = array.flattened().asType(.float32)
-        let floats = flattened.toArray(Float.self)
+        let floats = try flattened.asArray(Float.self)
         let shape = array.shape
         guard shape.count == 2 else { throw NPYError.unsupportedDtype("expected 2D array") }
         return Matrix(rows: shape[0], cols: shape[1], data: floats)
     }
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
-        return array.flattened().asType(.float32).toArray(Float.self)
+        return try array.flattened().asType(.float32).asArray(Float.self)
     }
 }

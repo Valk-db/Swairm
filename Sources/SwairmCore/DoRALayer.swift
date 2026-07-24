@@ -32,7 +32,7 @@ public final class DoRALinear: Module, @unchecked Sendable {
 
         // LoRA A: Kaiming uniform init
         let bound = sqrt(5.0 / Float(inFeatures))
-        self.loraA = MLXArray.randomUniform(-bound, bound, [rank, inFeatures])
+        self.loraA = MLX.randomUniform(-bound, bound, [rank, inFeatures])
 
         // LoRA B: zeros
         self.loraB = MLXArray.zeros([outFeatures, rank])
@@ -109,7 +109,7 @@ public func injectDoRA(
     var matches: [(module: Module, name: String, fullPath: String, pattern: String)] = []
 
     func collect(_ module: Module, path: String = "") {
-        let children = module.children
+        let children = module.children()
         for (name, child) in children {
             let fullPath = path.isEmpty ? name : "\(path).\(name)"
             if let linear = child as? Linear {
@@ -129,7 +129,7 @@ public func injectDoRA(
 
     // Replace collected matches
     for (parent, name, fullPath, pattern) in matches {
-        let children = parent.children
+        let children = parent.children()
         guard let linear = children[name] as? Linear else { continue }
         let rank = rankMap[pattern] ?? 4
         let alpha = alphaMap[pattern] ?? 16.0
