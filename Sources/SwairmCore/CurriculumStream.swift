@@ -10,6 +10,7 @@
 
 import Foundation
 import NPY
+import NPZ
 
 /// Loads and iterates curriculum shards from a directory.
 public struct CurriculumLoader: Sendable {
