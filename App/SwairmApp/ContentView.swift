@@ -3,14 +3,6 @@
 
 import SwiftUI
 
-// Unified LogEntry for both controllers
-struct LogEntry: Identifiable {
-    let id = UUID()
-    let date = Date()
-    let text: String
-    let isError: Bool
-}
-
 struct ContentView: View {
     @State private var useMLXTrainer = false
     @State private var proxyController = DeviceLoopController()
@@ -20,10 +12,6 @@ struct ContentView: View {
     @State private var anchorURLText = "http://192.168.1.100:8000"
     @State private var deviceIndex = 0
     @State private var intervalSeconds = 25.0
-
-    var controller: (any ObservableObject) {
-        useMLXTrainer ? mlxController : proxyController
-    }
 
     var isRunning: Bool {
         useMLXTrainer ? mlxController.isRunning : proxyController.isRunning
@@ -38,11 +26,7 @@ struct ContentView: View {
     }
 
     var log: [LogEntry] {
-        if useMLXTrainer {
-            return mlxController.log.map { LogEntry(id: $0.id, date: $0.date, text: $0.text, isError: $0.isError) }
-        } else {
-            return proxyController.log.map { LogEntry(id: $0.id, date: $0.date, text: $0.text, isError: $0.isError) }
-        }
+        useMLXTrainer ? mlxController.log : proxyController.log
     }
 
     var deviceID: String {

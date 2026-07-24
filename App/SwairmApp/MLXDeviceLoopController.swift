@@ -71,9 +71,10 @@ final class MLXDeviceLoopController {
             append("Started \(deviceID) (MLX) against \(url.absoluteString)")
 
             let interval = intervalSeconds
+            let maxSteps = maxStepsPerRound
             runTask = Task { [weak self] in
                 let budget = ResourceBudget(
-                    maxSteps: maxStepsPerRound,
+                    maxSteps: maxSteps,
                     maxWallClock: 300,
                     minBatteryFraction: 0.2
                 )
