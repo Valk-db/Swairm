@@ -5,7 +5,7 @@ let package = Package(
     name: "Swairm",
     platforms: [
         .macOS(.v14),
-        .iOS(.v18)
+        .iOS(.v17)
     ],
     products: [
         .library(name: "SwairmCore", targets: ["SwairmCore"]),
