@@ -30,12 +30,7 @@ final class MLXDeviceLoopController {
 
     private var runTask: Task<Void, Never>?
 
-    struct LogEntry: Identifiable {
-        let id = UUID()
-        let date = Date()
-        let text: String
-        let isError: Bool
-    }
+    typealias LogEntry = DeviceLoopController.LogEntry
 
     var deviceID: String { "phone\(deviceIndex)" }
 
