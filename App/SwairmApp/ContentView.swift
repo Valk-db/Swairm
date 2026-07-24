@@ -8,6 +8,11 @@ struct ContentView: View {
     @State private var proxyController = DeviceLoopController()
     @State private var mlxController = MLXDeviceLoopController()
 
+    // Shared state properties that both controllers expose
+    @State private var anchorURLText = "http://192.168.1.100:8000"
+    @State private var deviceIndex = 0
+    @State private var intervalSeconds = 25.0
+
     var controller: any ObservableObject {
         useMLXTrainer ? mlxController : proxyController
     }
@@ -30,30 +35,6 @@ struct ContentView: View {
 
     var deviceID: String {
         useMLXTrainer ? mlxController.deviceID : proxyController.deviceID
-    }
-
-    var deviceIndex: Int {
-        get { useMLXTrainer ? mlxController.deviceIndex : proxyController.deviceIndex }
-        set {
-            if useMLXTrainer { mlxController.deviceIndex = newValue }
-            else { proxyController.deviceIndex = newValue }
-        }
-    }
-
-    var intervalSeconds: Double {
-        get { useMLXTrainer ? mlxController.intervalSeconds : proxyController.intervalSeconds }
-        set {
-            if useMLXTrainer { mlxController.intervalSeconds = newValue }
-            else { proxyController.intervalSeconds = newValue }
-        }
-    }
-
-    var anchorURLText: String {
-        get { useMLXTrainer ? mlxController.anchorURLText : proxyController.anchorURLText }
-        set {
-            if useMLXTrainer { mlxController.anchorURLText = newValue }
-            else { proxyController.anchorURLText = newValue }
-        }
     }
 
     var body: some View {

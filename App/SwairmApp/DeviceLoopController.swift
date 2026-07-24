@@ -44,12 +44,14 @@ final class DeviceLoopController {
 
         UIDevice.current.isBatteryMonitoringEnabled = true
         let anchor = AnchorClient(base: url)
+        let deviceID = deviceID
+        let batteryFractionProvider: @Sendable () -> Float? = {
+            let level = UIDevice.current.batteryLevel
+            return level >= 0 ? level : nil
+        }
         let loop = ProxyDeviceLoop(
             anchor: anchor, deviceID: deviceID, deviceIndex: deviceIndex,
-            batteryFraction: {
-                let level = UIDevice.current.batteryLevel
-                return level >= 0 ? level : nil
-            })
+            batteryFraction: batteryFractionProvider)
 
         isRunning = true
         append("Started \(deviceID) against \(url.absoluteString)")

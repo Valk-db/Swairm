@@ -57,11 +57,18 @@ final class MLXDeviceLoopController {
                 deviceIndex: deviceIndex,
                 config: MLXLoopConfig(
                     modelPath: modelPath,
-                    curriculumDirectory: curriculumDirectory,
+                    targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
+                    rankMap: ["attn": 4, "mlp": 6],
+                    alphaMap: ["attn": 16.0, "mlp": 16.0],
+                    learningRate: learningRate,
+                    weightDecay: 0.01,
+                    maxGradNorm: 1.0,
+                    warmupSteps: 10,
                     maxStepsPerRound: maxStepsPerRound,
                     batchSize: batchSize,
                     sequenceLength: sequenceLength,
-                    learningRate: learningRate
+                    curriculumDirectory: curriculumDirectory,
+                    seed: 42 + UInt64(deviceIndex)
                 )
             )
 
@@ -107,7 +114,7 @@ final class MLXDeviceLoopController {
             result.round, result.status.version, result.trainingReport.finalLoss ?? -1,
             result.trainingReport.stepsCompleted,
             result.trainingReport.wallClock,
-            result.trainingReport.termination.rawValue
+            String(describing: result.trainingReport.termination)
         ))
     }
 
