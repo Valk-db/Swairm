@@ -4,7 +4,6 @@ import MLXNN
 import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
-import MLXNN.Losses
 
 // ============================================================================
 // MARK: - Configuration
@@ -113,7 +112,7 @@ public actor MLXTrainer: LocalTraining {
     public let config: MLXTrainerConfig
 
     // Training state
-    private var model: Module?
+    private var model: (any LanguageModel)?
     private var doraLayers: [String: DoRALinear] = [:]
     private var optimizer: AdamW?
     private var stepCount = 0
@@ -234,11 +233,9 @@ public actor MLXTrainer: LocalTraining {
             // Gradient clipping
             clipGradients(maxNorm: config.maxGradNorm)
 
-            // Optimizer step
+            // Optimizer step already done inside forwardBackward via valueAndGrad
+            // Update learning rate for next step
             optimizer?.learningRate = currentLR(step: stepCount)
-            if let grads = grads {
-                optimizer?.update(model: model!, gradients: grads)
-            }
 
             // Update step counter
             stepCount += 1
@@ -301,16 +298,19 @@ public actor MLXTrainer: LocalTraining {
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
         guard let model = model else { throw TrainingError.notPrepared }
 
-        // MLX value-and-grad pattern: compute loss and gradients
-        // valueAndGrad expects: (Model, [MLXArray]) -> [MLXArray]
-        let (loss, grads) = valueAndGrad(model: model) { model, inputs in
-            let logits = model(inputs[0])
-            // logits: [batch, seq, vocab], labels: [batch, seq]
+        // MLX value-and-grad pattern: valueAndGrad returns a transformed function
+        // Signature: valueAndGrad(model: f) -> (Model, Inputs...) -> (Output, Gradients)
+        // For LanguageModel: callAsFunction(_:cache:) requires cache parameter
+        var cache: [KVCache]? = nil
+        let gradFn = valueAndGrad(model: model) { model, inputs in
+            let logits = model(inputs[0], cache: &cache)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = labels.reshaped(-1)
             let loss = crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
-            return [loss]
+            return loss
         }
+
+        let (loss, grads) = gradFn(model, inputIds)
 
         // Apply gradients via optimizer
         if let optimizer = optimizer {
