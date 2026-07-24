@@ -16,7 +16,7 @@ private struct LocalTokenizerLoader: TokenizerLoader {
     public func load(from directory: URL) async throws -> any Tokenizer {
         // Use AutoTokenizer from the Tokenizers library to load from local directory
         // This loads tokenizer.json, tokenizer_config.json, etc. from the directory
-        let tokenizer = try await Tokenizers.AutoTokenizer.from(pretrained: directory.path)
+        let tokenizer = try await Tokenizers.AutoTokenizer.from(modelFolder: directory)
         return MLXLMTokenizer(tokenizer: tokenizer)
     }
 }
@@ -26,20 +26,19 @@ private struct MLXLMTokenizer: Tokenizer {
     let tokenizer: Tokenizers.Tokenizer
 
     func encode(text: String, addSpecialTokens: Bool) -> [Int] {
-        let encoding = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
-        return encoding.ids
+        return tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
     }
 
     func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
-        return tokenizer.decode(ids: tokenIds, skipSpecialTokens: skipSpecialTokens)
+        return tokenizer.decode(tokens: tokenIds, skipSpecialTokens: skipSpecialTokens)
     }
 
     func convertTokenToId(_ token: String) -> Int? {
-        return tokenizer.tokenToId(token: token)
+        return tokenizer.convertTokenToId(token)
     }
 
     func convertIdToToken(_ id: Int) -> String? {
-        return tokenizer.idToToken(id: id)
+        return tokenizer.convertIdToToken(id)
     }
 
     var bosToken: String? {
@@ -51,7 +50,7 @@ private struct MLXLMTokenizer: Tokenizer {
     }
 
     var unknownToken: String? {
-        return tokenizer.unkToken
+        return tokenizer.unknownToken
     }
 
     func applyChatTemplate(
@@ -59,20 +58,15 @@ private struct MLXLMTokenizer: Tokenizer {
         tools: [[String: any Sendable]]?,
         additionalContext: [String: any Sendable]?
     ) throws -> [Int] {
-        // Convert messages to the format expected by the tokenizer
-        var chatMessages: [[String: String]] = []
-        for msg in messages {
-            if let role = msg["role"] as? String,
-               let content = msg["content"] as? String {
-                chatMessages.append(["role": role, "content": content])
-            }
-        }
-        let template = try tokenizer.applyChatTemplate(
-            messages: chatMessages,
+        return try tokenizer.applyChatTemplate(
+            messages: messages,
+            chatTemplate: nil,
+            addGenerationPrompt: true,
+            truncation: false,
+            maxLength: nil,
             tools: tools,
-            addGenerationPrompt: true
+            additionalContext: additionalContext
         )
-        return template.ids
     }
 }
 
@@ -427,11 +421,8 @@ public actor MLXTrainer: LocalTraining {
 
         let (loss, grads) = gradFn(model, inputIds, labels)
 
-        // Apply gradients via optimizer — eval() forces lazy execution to materialize
-        if let optimizer = optimizer {
-            optimizer.update(model: model, gradients: grads)
-            eval(model, optimizer, loss)
-        }
+        // Optimizer step happens once, in train()'s loop — don't apply it here too.
+        eval(loss)
 
         return (loss.item(Float.self), grads)
     }
