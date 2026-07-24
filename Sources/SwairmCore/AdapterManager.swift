@@ -17,8 +17,13 @@ public class AdapterManager {
         //    (mlx-swift-lm: Libraries/MLXLMCommon/Adapters/LoRA/LoRAContainer.swift:128)
         var flat: [String: MLXArray] = [:]
         for (moduleName, adapterMod) in modulesMap {
-            flat["\(moduleName).lora_a"] = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
-            flat["\(moduleName).lora_b"] = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
+            // Wire A = (rank, in), B = (out, rank); MLX DoRA stores
+            // lora_a = (in, rank), lora_b = (rank, out). Transpose each factor
+            // wire -> MLX. `m` is (out,) on both sides.
+            let aT = adapterMod.A.transposed()
+            let bT = adapterMod.B.transposed()
+            flat["\(moduleName).lora_a"] = MLXArray(aT.data, [aT.rows, aT.cols])
+            flat["\(moduleName).lora_b"] = MLXArray(bT.data, [bT.rows, bT.cols])
             flat["\(moduleName).m"] = MLXArray(adapterMod.m, [adapterMod.m.count])
         }
 

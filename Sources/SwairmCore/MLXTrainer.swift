@@ -407,13 +407,19 @@ public actor MLXTrainer: LocalTraining {
             }
         }
 
-        // Convert to AdapterModule format
+        // Convert to AdapterModule format.
+        //
+        // Orientation: MLX DoRA stores lora_a as (in, rank) and lora_b as
+        // (rank, out) (DoRA+Layers.swift init: loraA is [inputDimensions,
+        // rank], loraB is [rank, outputDimensions]). The Anchor wire format is
+        // A = (rank, in), B = (out, rank) so that dW = B @ A (aggregator.py,
+        // factorToRank). Hence both factors are transposed on the way out.
         for (name, (a, b, m)) in layerParams {
             guard let aArray = a, let bArray = b, let mArray = m else { continue }
 
-            let aMatrix = try mlxArrayToMatrix(aArray)  // [rank, in]
-            let bMatrix = try mlxArrayToMatrix(bArray)  // [out, rank]
-            let mFloatArray = try mlxArrayToFloatArray(mArray)  // [out]
+            let aMatrix = try mlxArrayToMatrix(aArray.transposed())  // wire A: [rank, in]
+            let bMatrix = try mlxArrayToMatrix(bArray.transposed())  // wire B: [out, rank]
+            let mFloatArray = try mlxArrayToFloatArray(mArray)       // [out]
 
             modules[name] = AdapterModule(A: aMatrix, B: bMatrix, m: mFloatArray)
         }
@@ -426,18 +432,18 @@ public actor MLXTrainer: LocalTraining {
     // -------------------------------------------------------------------------
 
     private func applyGlobalAdapter(_ global: FetchedAdapter) throws {
-        // Convert AdapterModule -> MLXArrays and load into LoRAContainer
-        // First, we need to reconstruct ModuleParameters from AdapterModules
+        // Convert AdapterModule -> MLXArrays and load into LoRAContainer.
+        // Wire A = (rank, in), B = (out, rank); MLX stores lora_a = (in, rank),
+        // lora_b = (rank, out). Transpose each factor wire -> MLX (inverse of
+        // exportAdapter). `m` is (out,) on both sides -- no transpose.
         var mlxParams: [String: MLXArray] = [:]
 
         for (name, adapterMod) in global.modules {
-            let aArray = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
-            let bArray = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
-            let mArray = MLXArray(adapterMod.m, [adapterMod.m.count])
-
-            mlxParams["\(name).lora_a"] = aArray
-            mlxParams["\(name).lora_b"] = bArray
-            mlxParams["\(name).m"] = mArray
+            let aT = adapterMod.A.transposed()   // (in, rank) for lora_a
+            let bT = adapterMod.B.transposed()   // (rank, out) for lora_b
+            mlxParams["\(name).lora_a"] = MLXArray(aT.data, [aT.rows, aT.cols])
+            mlxParams["\(name).lora_b"] = MLXArray(bT.data, [bT.rows, bT.cols])
+            mlxParams["\(name).m"] = MLXArray(adapterMod.m, [adapterMod.m.count])
         }
 
         let params = ModuleParameters.unflattened(mlxParams)

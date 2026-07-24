@@ -1,4 +1,6 @@
 import XCTest
+import MLX
+import MLXNN
 @testable import SwairmCore
 
 final class SwairmCoreTests: XCTestCase {
@@ -211,5 +213,61 @@ final class SwairmCoreTests: XCTestCase {
         } catch {
             // expected
         }
+    }
+
+    // MARK: MLX <-> wire adapter orientation (transpose contract)
+
+    /// Wire format is A = (rank, in), B = (out, rank) so dW = B @ A
+    /// (aggregator.py, factorToRank). MLX DoRA stores lora_a = (in, rank),
+    /// lora_b = (rank, out) -- the transpose of each wire factor. The
+    /// export/apply paths must transpose so that DoRA's dense update
+    /// (scale * lora_b^T) @ lora_a^T equals the wire B @ A.
+    func testAdapterOrientationTransposePreservesDenseUpdate() {
+        let rank = 3, inDim = 5, outDim = 7
+        // Distinct values so a missed transpose changes the result.
+        let aWire = Matrix(rows: rank, cols: inDim,
+                           data: (0..<(rank * inDim)).map { Float($0) * 0.25 - 1 })
+        let bWire = Matrix(rows: outDim, cols: rank,
+                           data: (0..<(outDim * rank)).map { Float($0) * -0.125 + 0.5 })
+
+        // Wire -> MLX, exactly as the fixed AdapterManager / applyGlobalAdapter
+        // do: transpose each factor into MLX's (in,rank) / (rank,out) layout.
+        let aT = aWire.transposed()   // (in, rank) == lora_a
+        let bT = bWire.transposed()   // (rank, out) == lora_b
+        let loraA = MLXArray(aT.data, [aT.rows, aT.cols])
+        let loraB = MLXArray(bT.data, [bT.rows, bT.cols])
+
+        // MLX DoRA's dense adapter contribution is lora_b^T @ lora_a^T
+        // (DoRA+Layers.swift: adapted = weight + (scale*loraB.T) @ loraA.T).
+        let doraDense = matmul(loraB.transposed(), loraA.transposed())
+        let wireDense = bWire * aWire   // (out, rank) @ (rank, in) = (out, in)
+
+        XCTAssertEqual(doraDense.shape, [outDim, inDim])
+        let got = doraDense.asArray(Float.self)
+        XCTAssertEqual(got.count, wireDense.data.count)
+        for (g, w) in zip(got, wireDense.data) {
+            XCTAssertEqual(g, w, accuracy: 1e-4,
+                           "DoRA dense update must equal wire B @ A")
+        }
+    }
+
+    /// The export path is the inverse: wire A/B are the transposes of the MLX
+    /// factors, so a wire round-trip (wire -> MLX -> wire) is the identity.
+    func testAdapterOrientationWireRoundTripIsIdentity() throws {
+        let rank = 2, inDim = 4, outDim = 6
+        let aWire = Matrix(rows: rank, cols: inDim,
+                           data: (0..<(rank * inDim)).map { Float($0) * 0.5 - 2 })
+        let bWire = Matrix(rows: outDim, cols: rank,
+                           data: (0..<(outDim * rank)).map { Float($0) * 0.25 + 0.25 })
+
+        // wire -> MLX (transpose), then MLX -> wire (transpose back): exportAdapter
+        // transposes lora_a/lora_b to produce wire A/B.
+        let loraA = MLXArray(aWire.transposed().data, [inDim, rank])
+        let loraB = MLXArray(bWire.transposed().data, [rank, outDim])
+        let aBack = loraA.transposed()   // wire A again
+        let bBack = loraB.transposed()   // wire B again
+
+        XCTAssertEqual(aBack.asArray(Float.self), aWire.data)
+        XCTAssertEqual(bBack.asArray(Float.self), bWire.data)
     }
 }
