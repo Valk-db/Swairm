@@ -4,7 +4,6 @@
 
 import Foundation
 import MLX
-import MLXRandom
 import MLXNN
 
 /// DoRA-wrapped linear layer. Base weight is frozen; only LoRA params train.
@@ -33,7 +32,7 @@ public final class DoRALinear: Module, @unchecked Sendable {
 
         // LoRA A: Kaiming uniform init
         let bound = sqrt(5.0 / Float(inFeatures))
-        self.loraA = MLXRandom.uniform(low: -bound, high: bound, [rank, inFeatures])
+        self.loraA = MLX.uniform(-bound, bound, [rank, inFeatures])
 
         // LoRA B: zeros
         self.loraB = MLXArray.zeros([outFeatures, rank])

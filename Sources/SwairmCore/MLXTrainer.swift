@@ -298,23 +298,22 @@ public actor MLXTrainer: LocalTraining {
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
         guard let model = model else { throw TrainingError.notPrepared }
 
-        // MLX value-and-grad pattern: valueAndGrad returns a transformed function
-        // Signature: valueAndGrad(model: f) -> (Model, Inputs...) -> (Output, Gradients)
-        // For LanguageModel: callAsFunction(_:cache:) requires cache parameter
-        var cache: [KVCache]? = nil
-        let gradFn = valueAndGrad(model: model) { model, inputs in
-            let logits = model(inputs[0], cache: &cache)
+        // valueAndGrad closure must take (model, input, labels) and return loss
+        // Cast to LanguageModel inside closure since model is `any Module` here
+        let gradFn = valueAndGrad(model: model) { model, x, y in
+            let lm = model as! any LanguageModel
+            let logits = lm(x, cache: nil)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
-            let flatLabels = labels.reshaped(-1)
-            let loss = crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
-            return loss
+            let flatLabels = y.reshaped(-1)
+            return crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
         }
 
-        let (loss, grads) = gradFn(model, inputIds)
+        let (loss, grads) = gradFn(model, inputIds, labels)
 
-        // Apply gradients via optimizer
+        // Apply gradients via optimizer — eval() forces lazy execution to materialize
         if let optimizer = optimizer {
             optimizer.update(model: model, gradients: grads)
+            eval(model, optimizer, loss)
         }
 
         return (loss.item(Float.self), grads)
