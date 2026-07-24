@@ -184,7 +184,7 @@ public actor MLXTrainer: LocalTraining {
 
     // Training state
     private var model: (any LanguageModel)?
-    private var doraLayers: [String: DoRALinear] = [:]
+    private var loraContainer: LoRAContainer?
     private var optimizer: AdamW?
     private var stepCount = 0
     private var curriculumLoader: CurriculumLoader?
@@ -200,26 +200,32 @@ public actor MLXTrainer: LocalTraining {
     // MARK: LocalTraining Protocol
     // -------------------------------------------------------------------------
 
-    /// Load base model, inject DoRA layers, apply global adapter if provided.
+    /// Load base model, inject DoRA layers via MLX LoRAContainer, apply global adapter if provided.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model from local directory via MLXLMCommon
-        let modelConfig = ModelConfiguration(directory: URL(fileURLWithPath: config.modelPath))
-
-        // Use local tokenizer loader (loads from model directory)
+        let modelDirectory = URL(fileURLWithPath: config.modelPath)
         let modelContext = try await loadModel(
-            from: URL(fileURLWithPath: config.modelPath),
+            from: modelDirectory,
             using: LocalTokenizerLoader()
         )
         self.model = modelContext.model
 
-        // Inject DoRA layers
-        let (_, layers) = injectDoRA(
-            into: modelContext.model,
-            targetModules: config.targetModules,
-            rankMap: config.rankMap,
-            alphaMap: config.alphaMap
+        // Create LoRAConfiguration for DoRA
+        let loraConfig = LoRAConfiguration(
+            numLayers: modelContext.model.loraLayers.count,
+            fineTuneType: .dora,
+            loraParameters: LoRAConfiguration.LoRAParameters(
+                rank: config.targetModules.count > 0 ? config.rankMap.values.max() ?? 4 : 4,
+                scale: config.alphaMap.values.max() ?? 16.0,
+                keys: config.targetModules.isEmpty ? nil : config.targetModules
+            )
         )
-        self.doraLayers = layers
+
+        // Inject DoRA layers using MLX's LoRAContainer
+        self.loraContainer = try LoRAContainer.from(
+            model: modelContext.model,
+            configuration: loraConfig
+        )
 
         // Apply global adapter if provided (from Anchor)
         if let global = globalAdapter {
@@ -228,10 +234,9 @@ public actor MLXTrainer: LocalTraining {
 
         // Collect trainable parameters from all DoRA layers
         var trainableParams: [String: MLXArray] = [:]
-        for (name, layer) in doraLayers {
-            let params = layer.trainableParameters
-            for (key, value) in params {
-                trainableParams["\(name).\(key)"] = value
+        if let container = loraContainer {
+            for (key, value) in container.parameters {
+                trainableParams[key] = value
             }
         }
 
@@ -260,7 +265,7 @@ public actor MLXTrainer: LocalTraining {
         batches: S,
         budget: ResourceBudget
     ) async throws -> TrainingReport where S.Element == TrainingBatch {
-        guard model != nil, optimizer != nil else {
+        guard model != nil, optimizer != nil, loraContainer != nil else {
             throw TrainingError.notPrepared
         }
 
@@ -306,10 +311,13 @@ public actor MLXTrainer: LocalTraining {
             // Forward + backward pass
             let (loss, grads) = try await forwardBackward(inputIds: inputIds, labels: labels)
 
-            // Gradient clipping
-            clipGradients(maxNorm: config.maxGradNorm)
+            // Gradient clipping (MLXOptimizers handles internally)
+            // Apply gradients via optimizer
+            if let optimizer = optimizer {
+                optimizer.update(model: model!, gradients: grads)
+                eval(model!, optimizer, loss)
+            }
 
-            // Optimizer step already done inside forwardBackward via valueAndGrad
             // Update learning rate for next step
             optimizer?.learningRate = currentLR(step: stepCount)
 
@@ -334,19 +342,47 @@ public actor MLXTrainer: LocalTraining {
 
     /// Export full adapter state for upload (D7 semantics: full adapter, not delta).
     public func exportAdapter() async throws -> [String: AdapterModule] {
-        guard !doraLayers.isEmpty else {
+        guard let container = loraContainer else {
             throw TrainingError.noAdapter
         }
 
         var modules: [String: AdapterModule] = [:]
 
-        for (name, layer) in doraLayers {
-            let (a, b, m) = layer.exportAdapter()
+        for (name, array) in container.parameters {
+            // Convert MLXArray -> Matrix (row-major Float32) for wire format
+            // The parameter names follow MLX LoRA naming: "layer.lora_a", "layer.lora_b", "layer.m"
+            // We need to group them by layer
+        }
 
-            // Convert MLXArray -> Matrix (row-major Float32)
-            let aMatrix = try mlxArrayToMatrix(a)  // [rank, in]
-            let bMatrix = try mlxArrayToMatrix(b)  // [out, rank]
-            let mArray = try mlxArrayToFloatArray(m)  // [out]
+        // Group parameters by layer name
+        var layerParams: [String: (A: MLXArray?, B: MLXArray?, M: MLXArray?)] = [:]
+
+        for (name, array) in container.parameters {
+            // Parse layer name from parameter key
+            // Keys look like: "layers.0.attention.q_proj.lora_a", "layers.0.attention.q_proj.lora_b", "layers.0.attention.q_proj.m"
+            let parts = name.split(separator: ".")
+            if parts.count >= 2 {
+                let layerName = parts.dropLast().joined(separator: ".")
+                let paramType = String(parts.last!)
+
+                var params = layerParams[layerName] ?? (nil, nil, nil)
+                switch paramType {
+                case "lora_a": params.0 = array
+                case "lora_b": params.1 = array
+                case "m": params.2 = array
+                default: break
+                }
+                layerParams[layerName] = params
+            }
+        }
+
+        // Convert to AdapterModule format
+        for (name, (a, b, m)) in layerParams {
+            guard let aArray = a, let bArray = b, let mArray = m else { continue }
+
+            let aMatrix = try mlxArrayToMatrix(aArray)  // [rank, in]
+            let bMatrix = try mlxArrayToMatrix(bArray)  // [out, rank]
+            let mArray = try mlxArrayToFloatArray(mArray)  // [out]
 
             modules[name] = AdapterModule(A: aMatrix, B: bMatrix, m: mArray)
         }
@@ -359,23 +395,28 @@ public actor MLXTrainer: LocalTraining {
     // -------------------------------------------------------------------------
 
     private func applyGlobalAdapter(_ global: FetchedAdapter) throws {
-        // Convert AdapterModule -> MLXArrays and load into DoRALinear layers
-        for (name, adapterMod) in global.modules {
-            guard let layer = doraLayers[name] else { continue }
+        // Convert AdapterModule -> MLXArrays and load into LoRAContainer
+        // First, we need to reconstruct ModuleParameters from AdapterModules
+        var mlxParams: [String: MLXArray] = [:]
 
+        for (name, adapterMod) in global.modules {
             let aArray = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
             let bArray = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
             let mArray = MLXArray(adapterMod.m, [adapterMod.m.count])
 
-            layer.loadAdapter(A: aArray, B: bArray, m: mArray)
+            mlxParams["\(name).lora_a"] = aArray
+            mlxParams["\(name).lora_b"] = bArray
+            mlxParams["\(name).m"] = mArray
         }
+
+        let params = ModuleParameters.unflattened(mlxParams)
+        try model?.update(parameters: params, verify: .noUnusedKeys)
     }
 
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
         guard let model = model else { throw TrainingError.notPrepared }
 
         // valueAndGrad closure must take (model, input, labels) and return loss
-        // Cast to LanguageModel inside closure since model is `any Module` here
         let gradFn = valueAndGrad(model: model) { model, x, y in
             let lm = model as! any LanguageModel
             let logits = lm(x, cache: nil)
@@ -393,10 +434,6 @@ public actor MLXTrainer: LocalTraining {
         }
 
         return (loss.item(Float.self), grads)
-    }
-
-    private func clipGradients(maxNorm: Float) {
-        // MLXOptimizers handles gradients internally
     }
 
     private func decodeBatch(_ data: Data) -> (MLXArray, MLXArray) {
