@@ -73,6 +73,79 @@ jobs:
         if: always()
         run: cat anchor.log
 
+  # Real on-device MLX DoRA training loop end-to-end against the real Anchor.
+  # Downloads a tiny MLX model, generates a synthetic curriculum, then runs
+  # Sources/swairm-mlx-client (real fetch -> prepare -> AdamW DoRA train ->
+  # export -> upload) and asserts the Anchor version advanced (round aggregated).
+  # Needs macos-26 (Xcode 26: MLXLMCommon 3.x requirement); `swift run`
+  # provides the Metal backend that XCTest cannot load on the runner.
+  mlx-e2e:
+    runs-on: macos-26
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure Git for SwiftPM
+        run: git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Clear SwiftPM Cache
+        run: rm -rf .build ~/Library/Caches/org.swift.swiftpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Anchor + tooling dependencies
+        run: pip install numpy scikit-learn fastapi uvicorn huggingface_hub
+
+      - name: Download tiny MLX model
+        run: |
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          p = snapshot_download(
+              "mlx-community/Qwen3-0.6B-bf16",
+              local_dir="models/mlx-model",
+          )
+          print("model at", p)
+          PY
+
+      - name: Generate synthetic curriculum
+        run: |
+          python tools/make_curriculum.py \
+            --vocab 32000 \
+            --sequences 512 \
+            --seq-len 64 \
+            --out curriculum
+
+      - name: Start Anchor (fast aggregation interval)
+        run: |
+          rm -f state.json
+          FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
+          sleep 3
+          curl -sf http://127.0.0.1:8000/status
+
+      - name: Run real MLX fleet (2 devices, 2 rounds)
+        run: |
+          swift run swairm-mlx-client \
+            --anchor http://127.0.0.1:8000 \
+            --model models/mlx-model \
+            --curriculum curriculum \
+            --fleet 2 \
+            --rounds 2 \
+            --max-steps 4 \
+            --batch-size 1 \
+            --seq-len 64
+
+      - name: Verify aggregation rounds happened
+        run: |
+          curl -sf http://127.0.0.1:8000/status -o status.json
+          cat status.json
+          python -c "import json; s = json.load(open('status.json')); assert s['version'] >= 1, s; print('OK: version advanced to', s['version'])"
+
+      - name: Show Anchor log
+        if: always()
+        run: cat anchor.log
+
   # Sideloadable iOS app: build unsigned in CI, re-sign locally with
   # Sideloadly (App/project.yml pins the no-codesign settings).
   sideload-ipa:
