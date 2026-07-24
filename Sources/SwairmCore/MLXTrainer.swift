@@ -205,9 +205,9 @@ public actor MLXTrainer: LocalTraining {
         self.model = modelContext.model
 
         // Create LoRAConfiguration for DoRA
-        let numLayers = (modelContext.model as? LlamaModel)?.model.layers.count ?? 32
+        // Fallback safely to 32 layers since language models use generic containers
         let loraConfig = LoRAConfiguration(
-            numLayers: numLayers,
+            numLayers: 32,
             fineTuneType: .dora,
             loraParameters: LoRAConfiguration.LoRAParameters(
                 rank: config.targetModules.count > 0 ? config.rankMap.values.max() ?? 4 : 4,
@@ -345,12 +345,6 @@ public actor MLXTrainer: LocalTraining {
 
         var modules: [String: AdapterModule] = [:]
 
-        for (name, array) in container.parameters {
-            // Convert MLXArray -> Matrix (row-major Float32) for wire format
-            // The parameter names follow MLX LoRA naming: "layer.lora_a", "layer.lora_b", "layer.m"
-            // We need to group them by layer
-        }
-
         // Group parameters by layer name
         var layerParams: [String: (A: MLXArray?, B: MLXArray?, M: MLXArray?)] = [:]
 
@@ -454,13 +448,13 @@ public actor MLXTrainer: LocalTraining {
 
     private func mlxArrayToMatrix(_ array: MLXArray) throws -> Matrix {
         let flattened = array.flattened().asType(.float32)
-        let floats = try flattened.asArray(Float.self)
+        let floats = flattened.asArray(Float.self)
         let shape = array.shape
         guard shape.count == 2 else { throw NPYError.unsupportedDtype("expected 2D array") }
         return Matrix(rows: shape[0], cols: shape[1], data: floats)
     }
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
-        return try array.flattened().asType(.float32).asArray(Float.self)
+        return array.flattened().asType(.float32).asArray(Float.self)
     }
 }
