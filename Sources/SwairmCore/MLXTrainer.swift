@@ -267,6 +267,12 @@ public actor MLXTrainer: LocalTraining {
             configuration: loraConfig
         )
 
+        // Explicitly load the container into the model to ensure trainable
+        // parameters (LoRA adapters) are tracked by the model. LoRAContainer.from
+        // mutates the model in place, but the documented pattern calls load(into:)
+        // to make parameter tracking reliable after any subsequent updates.
+        try self.loraContainer?.load(into: loadedModel)
+
         // Apply global adapter if provided (from Anchor)
         if let global = globalAdapter {
             try applyGlobalAdapter(global)
