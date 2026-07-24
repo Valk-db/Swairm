@@ -4,6 +4,77 @@ import MLXNN
 import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
+import Tokenizers
+
+// MARK: - Local Tokenizer Loader
+
+/// A TokenizerLoader that loads tokenizers from a local directory using AutoTokenizer.
+/// This avoids the need for HuggingFace downloaders and works on iOS 17+.
+private struct LocalTokenizerLoader: TokenizerLoader {
+    public init() {}
+
+    public func load(from directory: URL) async throws -> any Tokenizer {
+        // Use AutoTokenizer from the Tokenizers library to load from local directory
+        // This loads tokenizer.json, tokenizer_config.json, etc. from the directory
+        let tokenizer = try await Tokenizers.AutoTokenizer.from(pretrained: directory.path)
+        return MLXLMTokenizer(tokenizer: tokenizer)
+    }
+}
+
+/// Wrapper to conform HuggingFace Tokenizer to MLXLMCommon.Tokenizer protocol
+private struct MLXLMTokenizer: Tokenizer {
+    let tokenizer: Tokenizers.Tokenizer
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        let encoding = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+        return encoding.ids
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        return tokenizer.decode(ids: tokenIds, skipSpecialTokens: skipSpecialTokens)
+    }
+
+    func convertTokenToId(_ token: String) -> Int? {
+        return tokenizer.tokenToId(token: token)
+    }
+
+    func convertIdToToken(_ id: Int) -> String? {
+        return tokenizer.idToToken(id: id)
+    }
+
+    var bosToken: String? {
+        return tokenizer.bosToken
+    }
+
+    var eosToken: String? {
+        return tokenizer.eosToken
+    }
+
+    var unknownToken: String? {
+        return tokenizer.unkToken
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        // Convert messages to the format expected by the tokenizer
+        var chatMessages: [[String: String]] = []
+        for msg in messages {
+            if let role = msg["role"] as? String,
+               let content = msg["content"] as? String {
+                chatMessages.append(["role": role, "content": content])
+            }
+        }
+        let template = try tokenizer.applyChatTemplate(
+            messages: chatMessages,
+            tools: tools,
+            addGenerationPrompt: true
+        )
+        return template.ids
+    }
+}
 
 // ============================================================================
 // MARK: - Configuration
@@ -131,12 +202,13 @@ public actor MLXTrainer: LocalTraining {
 
     /// Load base model, inject DoRA layers, apply global adapter if provided.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
-        // Load base model via MLXLMCommon
-        let modelConfig = ModelConfiguration(id: config.modelPath)
+        // Load base model from local directory via MLXLMCommon
+        let modelConfig = ModelConfiguration(directory: URL(fileURLWithPath: config.modelPath))
+
+        // Use local tokenizer loader (loads from model directory)
         let modelContext = try await loadModel(
-            from: HTTPDownloader(),
-            using: AutoTokenizerLoader(),
-            configuration: modelConfig
+            from: URL(fileURLWithPath: config.modelPath),
+            using: LocalTokenizerLoader()
         )
         self.model = modelContext.model
 
