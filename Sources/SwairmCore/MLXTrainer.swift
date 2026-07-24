@@ -1,10 +1,3 @@
-// MLX-based LocalTraining conformer for real on-device DoRA training.
-// Replaces LinearProxyTrainer with actual MLX/MLXNN forward/backward passes
-// on token sequences, using AdamW optimizer and the production wire format.
-//
-// Integration: drop-in replacement for LinearProxyTrainer in ProxyDeviceLoop.
-// Zero changes needed to ProxyDeviceLoop, DeviceLoopController, or iOS app.
-
 import Foundation
 import MLX
 import MLXNN
@@ -315,12 +308,14 @@ public actor MLXTrainer: LocalTraining {
         guard let model = model else { throw TrainingError.notPrepared }
 
         // MLX value-and-grad pattern: compute loss and gradients
-        let (loss, grads) = valueAndGrad(model: model) { model in
-            let logits = model(inputIds)
+        // valueAndGrad expects: (Model, [MLXArray]) -> [MLXArray]
+        let (loss, grads) = valueAndGrad(model: model) { model, inputs in
+            let logits = model.callAsFunction(inputs[0])
             // logits: [batch, seq, vocab], labels: [batch, seq]
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = labels.reshaped(-1)
-            return crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
+            let loss = crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
+            return [loss]
         }
 
         // Apply gradients via optimizer
