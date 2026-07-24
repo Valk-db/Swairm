@@ -24,7 +24,7 @@ public struct CurriculumLoader: Sendable {
 
         let files = try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "npz" }.sorted()
+        ).filter { $0.pathExtension == "npz" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         guard !files.isEmpty else {
             throw CurriculumError.noShardsFound(directory.path)
         }
@@ -70,6 +70,16 @@ public struct CurriculumBatchIterator: AsyncIteratorProtocol, Sendable {
     private var currentShardLabels: [UInt32] = []
     private var positionInShard = 0
     private var batchCounter = 0
+
+    public init(
+        shardFiles: [URL],
+        batchSize: Int,
+        sequenceLength: Int
+    ) {
+        self.shardFiles = shardFiles
+        self.batchSize = batchSize
+        self.sequenceLength = sequenceLength
+    }
 
     public mutating func next() async throws -> TrainingBatch? {
         while true {
