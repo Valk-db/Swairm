@@ -138,22 +138,36 @@ jobs:
       # kernels + steel gemm.
       - name: Build MLX metallib from vendored kernels
         run: |
+          set -e
           swift build
-          MLX_DIR=.build/checkouts/mlx-swift/Source/Cmlx/mlx
-          KDIR=$MLX_DIR/mlx/backend/metal/kernels
-          AIRS=$(mktemp -d)/airs
-          mkdir -p "$AIRS"
+          # Locate the vendored mlx source root and kernels dir on disk rather
+          # than hard-coding a path -- the checkout layout (submodule/symlink)
+          # differs from upstream's repo layout, so resolve it dynamically and
+          # print it for diagnosis.
+          KDIR=$(find .build/checkouts/mlx-swift -type d -path '*backend/metal/kernels' | head -1)
+          echo "kernels dir: $KDIR"
+          MLX_DIR=$(dirname "$(dirname "$(dirname "$(dirname "$KDIR")")")")
+          echo "include root (-I): $MLX_DIR"
+          echo "=== kernels dir contents (*.metal) ==="
+          ls -1 "$KDIR"/*.metal
+          echo "=== steel gemm kernels ==="
+          ls -1 "$KDIR"/steel/gemm/kernels/*.metal
+          AIRS=$(mktemp -d)
           for k in arange arg_reduce binary binary_two conv copy gemv \
                    quantized random reduce rope scan softmax sort unary \
                    gather scatter; do
+            src="$KDIR/$k.metal"
+            if [ ! -f "$src" ]; then echo "MISSING: $src"; exit 1; fi
             xcrun -sdk macosx metal -Wall -Wextra -fno-fast-math \
-              -c "$KDIR/$k.metal" -I"$MLX_DIR" -o "$AIRS/$k.air"
+              -c "$src" -I"$MLX_DIR" -o "$AIRS/$k.air"
           done
           for f in "$KDIR"/steel/gemm/kernels/*.metal; do
             name=$(basename "$f" .metal)
             xcrun -sdk macosx metal -Wall -Wextra -fno-fast-math \
               -c "$f" -I"$MLX_DIR" -o "$AIRS/$name.air"
           done
+          echo "=== compiled .air files ==="
+          ls -1 "$AIRS"/*.air
           BINDIR=$(swift build --show-bin-path)
           xcrun -sdk macosx metallib "$AIRS"/*.air -o "$BINDIR/mlx.metallib"
           ls -la "$BINDIR/mlx.metallib"
