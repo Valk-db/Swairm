@@ -113,14 +113,12 @@ public actor MLXTrainer: LocalTraining {
     private var optimizer: AdamW?
     private var stepCount = 0
     private var curriculumLoader: CurriculumLoader?
-    private var rng: GaussianRNG
 
     // For wire-format adapter application
     private let adapterManager = AdapterManager()
 
     public init(config: MLXTrainerConfig = MLXTrainerConfig()) {
         self.config = config
-        self.rng = GaussianRNG(seed: config.seed)
     }
 
     // -------------------------------------------------------------------------
@@ -131,7 +129,7 @@ public actor MLXTrainer: LocalTraining {
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model via MLXLMCommon
         let modelConfig = ModelConfiguration(id: config.modelPath)
-        let (loadedModel, _) = try await MLXLMCommon.loadModel(configuration: modelConfig) { _ in }
+        let (loadedModel, _) = try await loadModel(configuration: modelConfig)
         self.model = loadedModel
 
         // Inject DoRA layers
@@ -210,10 +208,6 @@ public actor MLXTrainer: LocalTraining {
                 termination = .wallClockBudget
                 break
             }
-            if let minBattery = budget.minBatteryFraction {
-                // Note: UIDevice not available in actor context; skip battery check here
-                // DeviceLoopController handles battery gating before starting rounds
-            }
             if budget.stopOnSeriousThermalState &&
                ProcessInfo.processInfo.thermalState == .serious {
                 termination = .thermal
@@ -238,7 +232,7 @@ public actor MLXTrainer: LocalTraining {
             // Optimizer step
             optimizer?.learningRate = currentLR(step: stepCount)
             optimizer?.step()
-            optimizer?.zeroGrad()
+            optimizer?.zeroGradients()
 
             // Update step counter
             stepCount += 1
@@ -290,18 +284,11 @@ public actor MLXTrainer: LocalTraining {
         for (name, adapterMod) in global.modules {
             guard let layer = doraLayers[name] else { continue }
 
-            // Pack into flat format expected by AdapterManager pattern
-            var flat: [String: MLXArray] = [:]
-            flat["\(name).lora_a"] = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
-            flat["\(name).lora_b"] = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
-            flat["\(name).m"] = MLXArray(adapterMod.m, [adapterMod.m.count])
+            let aArray = MLXArray(adapterMod.A.data, [adapterMod.A.rows, adapterMod.A.cols])
+            let bArray = MLXArray(adapterMod.B.data, [adapterMod.B.rows, adapterMod.B.cols])
+            let mArray = MLXArray(adapterMod.m, [adapterMod.m.count])
 
-            let params = ModuleParameters.unflattened(flat)
-            try layer.loadAdapter(
-                A: params["\(name).lora_a"]!,
-                B: params["\(name).lora_b"]!,
-                m: params["\(name).m"]!
-            )
+            layer.loadAdapter(A: aArray, B: bArray, m: mArray)
         }
     }
 
@@ -315,57 +302,46 @@ public actor MLXTrainer: LocalTraining {
             return MLX.crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
         }
 
-        // Update optimizer with gradients
-        optimizer?.update(grads: grads)
+        // Apply gradients via optimizer
+        if let optimizer = optimizer {
+            optimizer.update(model: model!, gradients: grads)
+        }
 
         return loss.item(Float.self)
     }
 
     private func clipGradients(maxNorm: Float) {
-        // MLXOptimizers doesn't expose gradients directly after step
-        // For now we rely on AdamW's stability; full impl would scale grads before step
+        // MLXOptimizers handles gradients internally; full impl would scale grads before step
     }
 
     private func decodeBatch(_ data: Data) -> (MLXArray, MLXArray) {
-        // Batch format: interleaved UInt32 [token, label, token, label...]
-        let count = data.count / 8
-        var tokens: [Int32] = []
-        var labels: [Int32] = []
-        tokens.reserveCapacity(count)
-        labels.reserveCapacity(count)
+        // Batch format: interleaved UInt32 token/label pairs
+        // [token_0, label_0, token_1, label_1, ...] for batch_size * seq_len tokens
+        let uints = data.withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) }
+        let totalPairs = uints.count / 2
+        var tokens = [UInt32]()
+        var labels = [UInt32]()
+        tokens.reserveCapacity(totalPairs)
+        labels.reserveCapacity(totalPairs)
 
-        var offset = 0
-        for _ in 0..<count {
-            let token: UInt32 = data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt32.self) }
-            let label: UInt32 = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 4, as: UInt32.self) }
-            tokens.append(Int32(token.littleEndian))
-            labels.append(Int32(label.littleEndian))
-            offset += 8
+        for i in stride(from: 0, to: uints.count, by: 2) {
+            tokens.append(uints[i])
+            if i + 1 < uints.count { labels.append(uints[i + 1]) }
         }
 
-        let inputIds = MLXArray(tokens, [config.batchSize, config.sequenceLength])
-        let labelIds = MLXArray(labels, [config.batchSize, config.sequenceLength])
-        return (inputIds, labelIds)
+        let inputIds = MLXArray(tokens, [config.batchSize, config.sequenceLength]).asType(.int32)
+        let labelsArray = MLXArray(labels, [config.batchSize, config.sequenceLength]).asType(.int32)
+        return (inputIds, labelsArray)
     }
 
     private func mlxArrayToMatrix(_ array: MLXArray) throws -> Matrix {
-        let floats = try array.asType(.float32).flattened().asArray(Float.self)
+        let floats = try array.flattened().asType(.float32).toCPU().data.bindMemory(to: Float32.self, capacity: array.size).map { Float($0) }
         let shape = array.shape
+        guard shape.count == 2 else { throw NPYError.unsupportedDtype("expected 2D array") }
         return Matrix(rows: shape[0], cols: shape[1], data: floats)
     }
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
-        return try array.asType(.float32).flattened().asArray(Float.self)
+        return try array.flattened().asType(.float32).toCPU().data.bindMemory(to: Float32.self, capacity: array.size).map { Float($0) }
     }
-}
-
-// ============================================================================
-// MARK: - Errors
-// ============================================================================
-
-enum TrainingError: Error {
-    case notPrepared
-    case noAdapter
-    case modelLoadFailed(String)
-    case curriculumError(String)
 }

@@ -32,10 +32,10 @@ public final class DoRALinear: Module, @unchecked Sendable {
 
         // LoRA A: Kaiming uniform init
         let bound = sqrt(5.0 / Float(inFeatures))
-        self.loraA = MLXRandom.uniform(-bound, bound, [rank, inFeatures])
+        self.loraA = MLX.randomUniform(-bound, bound, [rank, inFeatures])
 
         // LoRA B: zeros
-        self.loraB = MLXArray.zeros([outFeatures, rank])
+        self.loraB = MLX.zeros([outFeatures, rank])
 
         // Magnitude: L2 norm of base weight rows
         self.magnitude = MLX.sqrt(MLX.sum(baseWeight * baseWeight, axis: 1))
@@ -56,12 +56,12 @@ public final class DoRALinear: Module, @unchecked Sendable {
         let norms = MLX.sqrt(MLX.sum(combined * combined, axis: 1))  // [out]
 
         // Direction vectors (normalized rows)
-        let direction = combined / MLX.expandDims(norms, axis: 1)  // [out, in]
+        let direction = combined / norms.expandedDimensions(axis: 1)  // [out, in]
 
         // Scale by learned magnitude
-        let weight = MLX.expandDims(magnitude, axis: 1) * direction  // [out, in]
+        let weight = magnitude.expandedDimensions(axis: 1) * direction  // [out, in]
 
-        return MLX.linear(x, weight: weight, bias: baseBias)
+        return x @ weight.T + (baseBias ?? MLX.zeros([weight.shape[0]]))
     }
 
     /// Export adapter parameters for wire format (AdapterModule).
