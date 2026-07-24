@@ -24,17 +24,17 @@ there (e.g. agreement/relevance weighting, D3).
 - Real on-device MLX training loop: THE ACTIVE FRONTIER, see below.
 
 ## Where things stand right now
-MLXTrainer.swift was just refactored to use MLX's built-in
-LoRAContainer/DoRA infra (was hand-rolled before). Current CI
-(.github/workflows/macos.yml — no local Mac, this is the only build
-oracle):
-- `build-test` (swift build + swift test, SwairmCore package): passing
-- `integration` (real Anchor + real Swift fleet over HTTP): passing
-- `sideload-ipa` ("Build unsigned iOS app" step, xcodebuild for the
-  actual iOS target): FAILING on every commit since the refactor.
-  Last touched: App/SwairmApp/ContentView.swift and
-  MLXDeviceLoopController.swift. The package itself compiles clean —
-  this break is specific to the iOS app target build.
+All three CI jobs are green as of HEAD (build-test, integration,
+sideload-ipa) — the iOS app build was fixed in 3e18cea and has stayed
+fixed. The one interim failure (b99e002) was build-test, not
+sideload-ipa: orientation tests that needed the MLX/Metal runtime
+under `swift test` (XCTest can't load the default metallib on the
+runner). Fixed in d005fe3 by making those tests MLX-runtime-free.
+
+swairm-mlx-client (real on-device MLX DoRA fleet driver) and
+tools/make_curriculum.py now exist but no CI job runs them — real
+on-device MLX training is implemented but not yet proven end-to-end
+in CI. That's the actual active frontier now, see next section.
 
 ## Ground rules
 - No local Mac. Never claim something compiles or is fixed without a
