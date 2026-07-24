@@ -100,37 +100,36 @@ public func injectDoRA(
 ) -> (Module, [String: DoRALinear]) {
     var doraLayers: [String: DoRALinear] = [:]
 
-    // Recursively traverse and replace
-    func visit(_ module: Module, path: String = "") {
+    // Collect all matching Linear modules first (avoids nested closure mutation)
+    var matches: [(module: Module, name: String, fullPath: String, pattern: String)] = []
+
+    func collect(_ module: Module, path: String = "") {
         for (name, child) in module.children {
             let fullPath = path.isEmpty ? name : "\(path).\(name)"
-
             if let linear = child as? Linear {
-                // Check if this module matches any target pattern
-                var matched = false
-                var matchedPattern = ""
                 for pattern in targetModules {
                     if fullPath.contains(pattern) {
-                        matched = true
-                        matchedPattern = pattern
+                        matches.append((module, name, fullPath, pattern))
                         break
                     }
                 }
-
-                if matched {
-                    let rank = rankMap[matchedPattern] ?? 4
-                    let alpha = alphaMap[matchedPattern] ?? 16.0
-                    let dora = DoRALinear(base: linear, rank: rank, alpha: alpha)
-                    doraLayers[fullPath] = dora
-                    module.update(child: dora, forKey: name)
-                }
             } else {
-                // Recurse into child modules
-                visit(child, path: fullPath)
+                collect(child, path: fullPath)
             }
         }
     }
 
-    visit(model)
+    collect(model)
+
+    // Replace collected matches
+    for (parent, name, fullPath, pattern) in matches {
+        guard let linear = parent.children[name] as? Linear else { continue }
+        let rank = rankMap[pattern] ?? 4
+        let alpha = alphaMap[pattern] ?? 16.0
+        let dora = DoRALinear(base: linear, rank: rank, alpha: alpha)
+        doraLayers[fullPath] = dora
+        parent.update(child: dora, forKey: name)
+    }
+
     return (model, doraLayers)
 }
