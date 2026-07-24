@@ -140,7 +140,13 @@ public actor MLXTrainer: LocalTraining {
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model via MLXLMCommon
         let modelConfig = ModelConfiguration(id: config.modelPath)
-        let modelContext = try await loadModel(configuration: modelConfig)
+        let downloader = DefaultDownloader()
+        let tokenizerLoader = DefaultTokenizerLoader()
+        let modelContext = try await loadModel(
+            from: downloader,
+            using: tokenizerLoader,
+            configuration: modelConfig
+        )
         self.model = modelContext.model
 
         // Inject DoRA layers
@@ -307,7 +313,7 @@ public actor MLXTrainer: LocalTraining {
         guard let model = model else { throw TrainingError.notPrepared }
 
         // MLX value-and-grad pattern: compute loss and gradients
-        let (loss, grads) = valueAndGrad(model: model) { model in
+        let (loss, grads) = valueAndGrad(model: model) { model, inputIds, labels in
             let logits = model(inputIds)
             // logits: [batch, seq, vocab], labels: [batch, seq]
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
