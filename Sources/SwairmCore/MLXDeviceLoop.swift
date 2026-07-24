@@ -96,7 +96,7 @@ public actor MLXDeviceLoop {
         self.deviceIndex = deviceIndex
         self.config = config
 
-        var trainerConfig = MLXTrainerConfig(
+        let trainerConfig = MLXTrainerConfig(
             modelPath: config.modelPath,
             targetModules: config.targetModules,
             rankMap: config.rankMap,
