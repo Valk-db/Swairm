@@ -112,7 +112,8 @@ public func injectDoRA(
         let children = module.children()
         for child in children {
             let fullPath = path.isEmpty ? child.key : "\(path).\(child.key)"
-            if let linear = child.value as? Linear {
+            let childModule = child.value.value
+            if let linear = childModule as? Linear {
                 for pattern in targetModules {
                     if fullPath.contains(pattern) {
                         matches.append((module, child.key, fullPath, pattern))
@@ -120,7 +121,7 @@ public func injectDoRA(
                     }
                 }
             } else {
-                collect(child.value, path: fullPath)
+                collect(childModule, path: fullPath)
             }
         }
     }
@@ -130,14 +131,15 @@ public func injectDoRA(
     // Replace collected matches
     for (parent, name, fullPath, pattern) in matches {
         let children = parent.children()
-        guard let linear = children[name, unwrapping: Module.self] as? Linear else { continue }
+        guard let childItem = children[name],
+              let linear = childItem.value as? Linear else { continue }
         let rank = rankMap[pattern] ?? 4
         let alpha = alphaMap[pattern] ?? 16.0
         let dora = DoRALinear(base: linear, rank: rank, alpha: alpha)
         doraLayers[fullPath] = dora
         // Update module by replacing the child
         var newChildren = children
-        newChildren[name, unwrapping: Module.self] = dora
+        newChildren[name] = NestedItem(dora)
         _ = parent.update(modules: newChildren)
     }
 
