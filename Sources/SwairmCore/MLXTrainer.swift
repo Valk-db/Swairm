@@ -133,7 +133,11 @@ public actor MLXTrainer: LocalTraining {
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model via MLXLMCommon
         let modelConfig = ModelConfiguration(id: config.modelPath)
-        let modelContext = try await loadModel(configuration: modelConfig)
+        let modelContext = try await loadModel(
+            from: HTTPDownloader(),
+            using: AutoTokenizerLoader(),
+            configuration: modelConfig
+        )
         self.model = modelContext.model
 
         // Inject DoRA layers
