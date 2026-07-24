@@ -13,7 +13,7 @@ import Tokenizers
 private struct LocalTokenizerLoader: TokenizerLoader {
     public init() {}
 
-    public func load(from directory: URL) async throws -> any Tokenizer {
+    public func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         // Use AutoTokenizer from the Tokenizers library to load from local directory
         // This loads tokenizer.json, tokenizer_config.json, etc. from the directory
         let tokenizer = try await Tokenizers.AutoTokenizer.from(modelFolder: directory)
@@ -22,7 +22,7 @@ private struct LocalTokenizerLoader: TokenizerLoader {
 }
 
 /// Wrapper to conform HuggingFace Tokenizer to MLXLMCommon.Tokenizer protocol
-private struct MLXLMTokenizer: Tokenizer {
+private struct MLXLMTokenizer: MLXLMCommon.Tokenizer {
     let tokenizer: Tokenizers.Tokenizer
 
     func encode(text: String, addSpecialTokens: Bool) -> [Int] {
@@ -205,8 +205,9 @@ public actor MLXTrainer: LocalTraining {
         self.model = modelContext.model
 
         // Create LoRAConfiguration for DoRA
+        let numLayers = (modelContext.model as? LlamaModel)?.model.layers.count ?? 32
         let loraConfig = LoRAConfiguration(
-            numLayers: modelContext.model.loraLayers.count,
+            numLayers: numLayers,
             fineTuneType: .dora,
             loraParameters: LoRAConfiguration.LoRAParameters(
                 rank: config.targetModules.count > 0 ? config.rankMap.values.max() ?? 4 : 4,
@@ -230,7 +231,9 @@ public actor MLXTrainer: LocalTraining {
         var trainableParams: [String: MLXArray] = [:]
         if let container = loraContainer {
             for (key, value) in container.parameters {
-                trainableParams[key] = value
+                if case .value(let array) = item {
+                    trainableParams[key] = array
+                }
             }
         }
 
@@ -307,8 +310,8 @@ public actor MLXTrainer: LocalTraining {
 
             // Gradient clipping (MLXOptimizers handles internally)
             // Apply gradients via optimizer
-            if let optimizer = optimizer {
-                optimizer.update(model: model!, gradients: grads)
+            if let optimizer = optimizer, let validGrads = grads {
+                optimizer.update(model: model!, gradients: validGrads)
                 eval(model!, optimizer, loss)
             }
 
@@ -360,11 +363,13 @@ public actor MLXTrainer: LocalTraining {
                 let paramType = String(parts.last!)
 
                 var params = layerParams[layerName] ?? (nil, nil, nil)
-                switch paramType {
-                case "lora_a": params.0 = array
-                case "lora_b": params.1 = array
-                case "m": params.2 = array
-                default: break
+                if case .value(let tensor) = array {
+                    switch paramType {
+                    case "lora_a": params.0 = tensor
+                    case "lora_b": params.1 = tensor
+                    case "m": params.2 = tensor
+                    default: break
+                    }
                 }
                 layerParams[layerName] = params
             }
@@ -376,9 +381,9 @@ public actor MLXTrainer: LocalTraining {
 
             let aMatrix = try mlxArrayToMatrix(aArray)  // [rank, in]
             let bMatrix = try mlxArrayToMatrix(bArray)  // [out, rank]
-            let mArray = try mlxArrayToFloatArray(mArray)  // [out]
+            let mFloatArray = try mlxArrayToFloatArray(mArray)  // [out]
 
-            modules[name] = AdapterModule(A: aMatrix, B: bMatrix, m: mArray)
+            modules[name] = AdapterModule(A: aMatrix, B: bMatrix, m: mFloatArray)
         }
 
         return modules
