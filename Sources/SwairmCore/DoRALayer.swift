@@ -1,0 +1,136 @@
+// DoRA (Weight-Decomposed Low-Rank Adaptation) layer for MLX.
+// Wraps a frozen base Linear layer with trainable LoRA A, B and magnitude m.
+// Forward: m * (W + scaling * B @ A) / ||W + scaling * B @ A||
+
+import Foundation
+import MLX
+import MLXNN
+
+/// DoRA-wrapped linear layer. Base weight is frozen; only LoRA params train.
+public final class DoRALinear: Module, @unchecked Sendable {
+    // Frozen base parameters
+    public let baseWeight: MLXArray      // [out_features, in_features]
+    public let baseBias: MLXArray?       // [out_features]
+
+    // Trainable DoRA parameters
+    public var loraA: MLXArray           // [rank, in_features]
+    public var loraB: MLXArray           // [out_features, rank]
+    public var magnitude: MLXArray       // [out_features]
+
+    public let rank: Int
+    public let scaling: Float            // alpha / rank
+
+    /// Initialize from a frozen base Linear layer.
+    public init(base: Linear, rank: Int, alpha: Float) {
+        self.baseWeight = base.weight
+        self.baseBias = base.bias
+        self.rank = rank
+        self.scaling = alpha / Float(rank)
+
+        let outFeatures = baseWeight.shape[0]
+        let inFeatures = baseWeight.shape[1]
+
+        // LoRA A: Kaiming uniform init
+        let bound = sqrt(5.0 / Float(inFeatures))
+        self.loraA = MLXRandom.uniform(-bound, bound, [rank, inFeatures])
+
+        // LoRA B: zeros
+        self.loraB = MLXArray.zeros([outFeatures, rank])
+
+        // Magnitude: L2 norm of base weight rows
+        self.magnitude = MLX.sqrt(MLX.sum(baseWeight * baseWeight, axis: 1))
+
+        super.init()
+    }
+
+    /// Forward pass: DoRA reparameterization.
+    /// weight = magnitude * (baseWeight + scaling * loraB @ loraA) / ||baseWeight + scaling * loraB @ loraA||
+    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        // Delta weight: scaling * B @ A  [out, in]
+        let deltaW = (loraB * scaling) @ loraA
+
+        // Combined weight
+        let combined = baseWeight + deltaW
+
+        // Row-wise L2 norm
+        let norms = MLX.sqrt(MLX.sum(combined * combined, axis: 1))  // [out]
+
+        // Direction vectors (normalized rows)
+        let direction = combined / MLX.expandDims(norms, axis: 1)  // [out, in]
+
+        // Scale by learned magnitude
+        let weight = MLX.expandDims(magnitude, axis: 1) * direction  // [out, in]
+
+        return MLX.linear(x, weight: weight, bias: baseBias)
+    }
+
+    /// Export adapter parameters for wire format (AdapterModule).
+    public func exportAdapter() -> (A: MLXArray, B: MLXArray, m: MLXArray) {
+        return (loraA, loraB, magnitude)
+    }
+
+    /// Load adapter parameters from wire format.
+    public func loadAdapter(A: MLXArray, B: MLXArray, m: MLXArray) {
+        self.loraA = A
+        self.loraB = B
+        self.magnitude = m
+    }
+
+    /// Trainable parameters for optimizer collection.
+    public var trainableParameters: [String: MLXArray] {
+        return [
+            "loraA": loraA,
+            "loraB": loraB,
+            "magnitude": magnitude
+        ]
+    }
+}
+
+// ============================================================================
+// MARK: - DoRA Injection
+// ============================================================================
+
+/// Inject DoRALinear layers into a model, replacing target Linear modules.
+/// Returns (model, [moduleName: DoRALinear]) for optimizer collection.
+public func injectDoRA(
+    into model: Module,
+    targetModules: [String],
+    rankMap: [String: Int],
+    alphaMap: [String: Float]
+) -> (Module, [String: DoRALinear]) {
+    var doraLayers: [String: DoRALinear] = [:]
+
+    // Recursively traverse and replace
+    func visit(_ module: Module, path: String = "") {
+        for (name, child) in module.children {
+            let fullPath = path.isEmpty ? name : "\(path).\(name)"
+
+            if let linear = child as? Linear {
+                // Check if this module matches any target pattern
+                var matched = false
+                var matchedPattern = ""
+                for pattern in targetModules {
+                    if fullPath.contains(pattern) {
+                        matched = true
+                        matchedPattern = pattern
+                        break
+                    }
+                }
+
+                if matched {
+                    let rank = rankMap[matchedPattern] ?? 4
+                    let alpha = alphaMap[matchedPattern] ?? 16.0
+                    let dora = DoRALinear(base: linear, rank: rank, alpha: alpha)
+                    doraLayers[fullPath] = dora
+                    module.update(child: dora, forKey: name)
+                }
+            } else {
+                // Recurse into child modules
+                visit(child, path: fullPath)
+            }
+        }
+    }
+
+    visit(model)
+    return (model, doraLayers)
+}
