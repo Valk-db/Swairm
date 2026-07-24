@@ -197,15 +197,18 @@ public actor MLXTrainer: LocalTraining {
     /// Load base model, inject DoRA layers via MLX LoRAContainer, apply global adapter if provided.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model from local directory via MLXLMCommon
+        // Load base model from local directory via MLXLMCommon
         let modelDirectory = URL(fileURLWithPath: config.modelPath)
-        let modelContext = try await loadModel(
-            from: modelDirectory,
-            using: LocalTokenizerLoader()
-        )
-        self.model = modelContext.model
+        let loadedModel: any LanguageModel = try await {
+            let context = try await loadModel(
+                from: modelDirectory,
+                using: LocalTokenizerLoader()
+            )
+            return context.model
+        }()
+        self.model = loadedModel
 
         // Create LoRAConfiguration for DoRA
-        // Fallback safely to 32 layers since language models use generic containers
         let loraConfig = LoRAConfiguration(
             numLayers: 32,
             fineTuneType: .dora,
@@ -218,7 +221,7 @@ public actor MLXTrainer: LocalTraining {
 
         // Inject DoRA layers using MLX's LoRAContainer
         self.loraContainer = try LoRAContainer.from(
-            model: modelContext.model,
+            model: loadedModel,
             configuration: loraConfig
         )
 
@@ -227,10 +230,10 @@ public actor MLXTrainer: LocalTraining {
             try applyGlobalAdapter(global)
         }
 
-        // Collect trainable parameters from all DoRA layers
+        // Collect trainable parameters from allDoRA layers
         var trainableParams: [String: MLXArray] = [:]
         if let container = loraContainer {
-            for (key, value) in container.parameters {
+            for (key, item) in container.parameters {
                 if case .value(let array) = item {
                     trainableParams[key] = array
                 }
