@@ -11,7 +11,6 @@ import MLXNN
 import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
-import MLXRandom
 
 // ============================================================================
 // MARK: - Configuration

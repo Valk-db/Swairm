@@ -32,7 +32,7 @@ public final class DoRALinear: Module, @unchecked Sendable {
 
         // LoRA A: Kaiming uniform init
         let bound = sqrt(5.0 / Float(inFeatures))
-        self.loraA = MLX.randomUniform(-bound, bound, [rank, inFeatures])
+        self.loraA = MLXArray.randomUniform(-bound, bound, [rank, inFeatures])
 
         // LoRA B: zeros
         self.loraB = MLXArray.zeros([outFeatures, rank])
