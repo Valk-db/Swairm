@@ -124,19 +124,39 @@ jobs:
           sleep 3
           curl -sf http://127.0.0.1:8000/status
 
-      # Diagnostic: locate where SwiftPM puts the Cmlx resource bundle /
-      # metallib so we can make MLX's Metal backend find it for a bare
-      # `swift run` executable (its default lookup only checks mainBundle and
-      # already-loaded bundles, neither of which covers .build/debug).
-      - name: Locate MLX metallib / resource bundle
+      # mlx-swift 0.10.0's SwiftPM build never compiles the Metal kernels into
+      # a metallib (its only build plugin is CUDA-only), so MLX's Metal backend
+      # cannot find its library for a bare `swift run` executable. Reproduce
+      # upstream mlx's CMake recipe: compile each kernel .metal to .air with
+      # `xcrun metal`, link with `xcrun metallib`, then drop it next to the
+      # binary. MLX's colocated-library fallback (get_colocated_mtllib_path in
+      # mlx/backend/metal/device.h) resolves <dir-of-that-binary>/mlx.metallib:
+      # it dladdr()s an inline header function so the directory is wherever the
+      # Cmlx-containing image sits (the swift-run bin dir for debug builds),
+      # and the filename is lib_name("mlx") + ".metallib". Kernel set matches
+      # the vendored mlx SHA bf7cd299's kernels/CMakeLists.txt: the 17 named
+      # kernels + steel gemm.
+      - name: Build MLX metallib from vendored kernels
         run: |
           swift build
-          echo "=== metallib files under .build ==="
-          find .build -name '*.metallib' -o -name 'mlx-swift_Cmlx.bundle' 2>/dev/null
-          echo "=== debug dir listing (bundle?) ==="
-          ls -la .build/debug/ 2>/dev/null | grep -iE 'bundle|metallib|Cmlx' || echo "(none in .build/debug)"
-          echo "=== executable location ==="
-          swift build --show-bin-path
+          MLX_DIR=.build/checkouts/mlx-swift/Source/Cmlx/mlx
+          KDIR=$MLX_DIR/mlx/backend/metal/kernels
+          AIRS=$(mktemp -d)/airs
+          mkdir -p "$AIRS"
+          for k in arange arg_reduce binary binary_two conv copy gemv \
+                   quantized random reduce rope scan softmax sort unary \
+                   gather scatter; do
+            xcrun -sdk macosx metal -Wall -Wextra -fno-fast-math \
+              -c "$KDIR/$k.metal" -I"$MLX_DIR" -o "$AIRS/$k.air"
+          done
+          for f in "$KDIR"/steel/gemm/kernels/*.metal; do
+            name=$(basename "$f" .metal)
+            xcrun -sdk macosx metal -Wall -Wextra -fno-fast-math \
+              -c "$f" -I"$MLX_DIR" -o "$AIRS/$name.air"
+          done
+          BINDIR=$(swift build --show-bin-path)
+          xcrun -sdk macosx metallib "$AIRS"/*.air -o "$BINDIR/mlx.metallib"
+          ls -la "$BINDIR/mlx.metallib"
 
       - name: Run real MLX fleet (2 devices, 2 rounds)
         run: |
