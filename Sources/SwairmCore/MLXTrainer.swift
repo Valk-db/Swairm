@@ -4,6 +4,7 @@ import MLXNN
 import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
+import MLXNN.Losses
 
 // ============================================================================
 // MARK: - Configuration
@@ -133,13 +134,7 @@ public actor MLXTrainer: LocalTraining {
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
         // Load base model via MLXLMCommon
         let modelConfig = ModelConfiguration(id: config.modelPath)
-        let downloader = HTTPDownloader()
-        let tokenizerLoader = AutoTokenizerLoader()
-        let modelContext = try await loadModel(
-            from: downloader,
-            using: tokenizerLoader,
-            configuration: modelConfig
-        )
+        let modelContext = try await loadModel(configuration: modelConfig)
         self.model = modelContext.model
 
         // Inject DoRA layers
@@ -244,7 +239,6 @@ public actor MLXTrainer: LocalTraining {
             if let grads = grads {
                 optimizer?.update(model: model!, gradients: grads)
             }
-            model!.eval()
 
             // Update step counter
             stepCount += 1
@@ -310,7 +304,7 @@ public actor MLXTrainer: LocalTraining {
         // MLX value-and-grad pattern: compute loss and gradients
         // valueAndGrad expects: (Model, [MLXArray]) -> [MLXArray]
         let (loss, grads) = valueAndGrad(model: model) { model, inputs in
-            let logits = model.callAsFunction(inputs[0])
+            let logits = model(inputs[0])
             // logits: [batch, seq, vocab], labels: [batch, seq]
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = labels.reshaped(-1)
@@ -322,7 +316,6 @@ public actor MLXTrainer: LocalTraining {
         if let optimizer = optimizer {
             optimizer.update(model: model, gradients: grads)
         }
-        model.eval()
 
         return (loss.item(Float.self), grads)
     }
