@@ -4,6 +4,7 @@ import MLXNN
 import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
+import MLXLLM
 import Tokenizers
 
 // MARK: - Local Tokenizer Loader
@@ -225,7 +226,13 @@ public actor MLXTrainer: LocalTraining {
         // Load base model from local directory via MLXLMCommon
         let modelDirectory = URL(fileURLWithPath: config.modelPath)
         let loadedModel: any LanguageModel = try await {
-            let context = try await loadModel(
+            // Use LLMModelFactory directly rather than the free-function
+            // MLXLMCommon loadModel: the latter resolves a factory through the
+            // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
+            // throws noModelFactoryAvailable when the MLXLLM ObjC class isn't
+            // realized yet. Calling the concrete factory's own load(from:using:)
+            // bypasses the registry entirely.
+            let context = try await LLMModelFactory.shared.load(
                 from: modelDirectory,
                 using: LocalTokenizerLoader()
             )
