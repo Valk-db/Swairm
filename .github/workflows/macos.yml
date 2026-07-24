@@ -124,6 +124,20 @@ jobs:
           sleep 3
           curl -sf http://127.0.0.1:8000/status
 
+      # Diagnostic: locate where SwiftPM puts the Cmlx resource bundle /
+      # metallib so we can make MLX's Metal backend find it for a bare
+      # `swift run` executable (its default lookup only checks mainBundle and
+      # already-loaded bundles, neither of which covers .build/debug).
+      - name: Locate MLX metallib / resource bundle
+        run: |
+          swift build
+          echo "=== metallib files under .build ==="
+          find .build -name '*.metallib' -o -name 'mlx-swift_Cmlx.bundle' 2>/dev/null
+          echo "=== debug dir listing (bundle?) ==="
+          ls -la .build/debug/ 2>/dev/null | grep -iE 'bundle|metallib|Cmlx' || echo "(none in .build/debug)"
+          echo "=== executable location ==="
+          swift build --show-bin-path
+
       - name: Run real MLX fleet (2 devices, 2 rounds)
         run: |
           swift run swairm-mlx-client \
