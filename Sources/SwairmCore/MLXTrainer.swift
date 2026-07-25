@@ -5,7 +5,6 @@ import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
 import MLXLLM
-import MLXRandom
 import Tokenizers
 
 // MARK: - Local Tokenizer Loader
@@ -414,7 +413,7 @@ public actor MLXTrainer: LocalTraining {
                 let clipCoef = config.maxGradNorm / (totalNorm + 1e-6)
                 if clipCoef < 1 {
                     clippedGrads = ModuleParameters.unflattened(
-                        grads.flattened().mapValues { $0 * clipCoef }
+                        grads.flattened().map { ($0.0, $0.1 * clipCoef) }
                     )
                 }
             }
@@ -530,14 +529,16 @@ public actor MLXTrainer: LocalTraining {
 
         // valueAndGrad closure must take (model, input, labels) and return loss
         // Pass model as explicit argument to avoid capturing the `var model` reference
-        let gradFn = valueAndGrad { (model: any LanguageModel, x: MLXArray, y: MLXArray) in
-            let logits = model(x, cache: nil)
+        func inner(parameters: ModuleParameters, arrays: [MLXArray]) -> [MLXArray] {
+            model.update(parameters: parameters)
+            let logits = model(arrays[0], cache: nil)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
-            let flatLabels = y.reshaped(-1)
-            return crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
+            let flatLabels = arrays[1].reshaped(-1)
+            return [crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)]
         }
-
-        let (loss, grads) = gradFn(model, inputIds, labels)
+        let vg = valueAndGrad(inner)
+        let (values, grads) = vg(model.trainableParameters(), [inputIds, labels])
+        let loss = values[0]
 
         // Optimizer step happens once, in train()'s loop — don't apply it here too.
 
@@ -626,12 +627,6 @@ extension MLXTrainer {
             arrays.append(("model_\(name)", npyArray))
         }
 
-        // 4. Save RNG state if available
-        if let rngState = MLXRandom.state {
-            let rngArray = NPYArray(descr: "|u1", shape: [rngState.count], raw: rngState)
-            arrays.append(("rng_state", rngArray))
-        }
-
         let data = try NPZ.write(arrays)
         try data.write(to: url, options: .atomic)
         appendLog("Saved checkpoint to \(url.lastPathComponent) (step \(stepCount))")
@@ -682,18 +677,12 @@ extension MLXTrainer {
             try model.update(parameters: params, verify: .noUnusedKeys)
         }
 
-        // 4. Restore RNG state
-        if let rngArray = dict["rng_state"],
-           rngArray.descr == "|u1" {
-            MLXRandom.state = rngArray.raw
-        }
-
         appendLog("Loaded checkpoint from \(url.lastPathComponent) (step \(stepCount))")
     }
 
     /// Get current model parameters for checkpointing.
     private func getModelParameters() throws -> ModuleParameters {
         guard let model = model else { throw TrainingError.notPrepared }
-        return model.parameters
+        return model.parameters()
     }
 }

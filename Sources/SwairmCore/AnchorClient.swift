@@ -98,15 +98,7 @@ public final class AnchorClient: AnchorConnecting {
         return UploadReceipt(queuedID: "")
     }
 
-    /// The Anchor (main.py) does not serve curriculum data yet; the protocol
-    /// reserves the slot so orchestration code can be written against it now.
-    @discardableResult
-    public func downloadCurriculum(epoch: Int, to destination: URL) async throws -> CurriculumManifest {
-        throw AnchorClientError.unsupported(
-            "the Anchor exposes no curriculum endpoint yet (epoch \(epoch))")
-    }
-
-    // ------------------------------------------------------------- curriculum download
+------------------------------------------------- curriculum download
 
     /// Fetch manifest for a curriculum epoch.
     public func fetchManifest(epoch: Int) async throws -> CurriculumManifest {

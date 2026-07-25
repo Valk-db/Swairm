@@ -26,7 +26,7 @@ public struct CurriculumLoader: Sendable {
             at: directory, includingPropertiesForKeys: nil
         ).filter { $0.pathExtension == "npz" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         guard !files.isEmpty else {
-            throw CurriculumError.noShardsFound(directory.path)
+            throw CurriculumStreamError.noShardsFound(directory.path)
         }
         self.shardFiles = files
     }
@@ -131,7 +131,7 @@ public struct CurriculumBatchIterator: AsyncIteratorProtocol, Sendable {
 
         guard let tokenArray = arrays["token_ids"],
               let labelArray = arrays["labels"] else {
-            throw CurriculumError.missingArrays(url.path)
+            throw CurriculumStreamError.missingArrays(url.path)
         }
 
         let tokens = try tokenArray.asUInt32()
@@ -161,7 +161,7 @@ extension NPYArray {
         case "|u1", "|b1": // uint8
             return raw.withUnsafeBytes { Array($0.bindMemory(to: UInt8.self)).map { UInt32($0) } }
         default:
-            throw CurriculumError.unsupportedDtype(descr, path: "")
+            throw CurriculumStreamError.unsupportedDtype(descr, path: "")
         }
     }
 }
@@ -170,7 +170,7 @@ extension NPYArray {
 // MARK: - Errors
 // ============================================================================
 
-enum CurriculumError: Error {
+enum CurriculumStreamError: Error {
     case noShardsFound(String)
     case missingArrays(String)
     case unsupportedDtype(String, path: String)

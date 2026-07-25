@@ -62,18 +62,7 @@ public struct UploadReceipt: Sendable {
     }
 }
 
-/// Metadata for a curriculum shard that was streamed to local storage.
-public struct CurriculumManifest: Sendable {
-    public let epoch: Int
-    public let localURL: URL
-    public let byteCount: Int64
 
-    public init(epoch: Int, localURL: URL, byteCount: Int64) {
-        self.epoch = epoch
-        self.localURL = localURL
-        self.byteCount = byteCount
-    }
-}
 
 /// Pure transport to the Anchor. Implementations must be non-blocking.
 public protocol AnchorConnecting: Sendable {
@@ -84,12 +73,6 @@ public protocol AnchorConnecting: Sendable {
 
     @discardableResult
     func upload(_ payload: AdapterUploadPayload) async throws -> UploadReceipt
-
-    /// Streams the curriculum shard for `epoch` to `destination` on disk,
-    /// never buffering the full payload in memory. Throws
-    /// `AnchorClientError.unsupported` until the Anchor grows the endpoint.
-    @discardableResult
-    func downloadCurriculum(epoch: Int, to destination: URL) async throws -> CurriculumManifest
 }
 
 // ==========================================================================

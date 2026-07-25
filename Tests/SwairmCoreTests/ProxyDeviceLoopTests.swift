@@ -39,12 +39,6 @@ private actor MockAnchor: AnchorConnecting {
         uploads.append(payload)
         return UploadReceipt(queuedID: "q\(uploads.count)")
     }
-
-    @discardableResult
-    func downloadCurriculum(epoch: Int, to destination: URL) async throws
-        -> CurriculumManifest {
-        throw AnchorClientError.unsupported("mock has no curriculum")
-    }
 }
 
 // ==========================================================================

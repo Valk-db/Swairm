@@ -2,6 +2,7 @@
 // uploads are float16 ('<f2'), Anchor snapshots are float32 ('<f4'),
 // __meta__ is uint8 ('|u1') JSON bytes.
 
+import MLX
 import Foundation
 
 public enum Float16Codec {
