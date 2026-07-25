@@ -220,7 +220,7 @@ HMAC_PROTECTED_PATHS = {
     "/curriculum/",   # prefix match for all curriculum endpoints
 }
 
-def verify_hmac(request: Request, body: bytes) -> bool:
+def verify_hmac(request: "Request", body: bytes) -> bool:
     """Verify HMAC-SHA256 signature on request. Returns True if valid or auth disabled."""
     if not HMAC_SECRET:
         return True  # auth disabled (dev mode)
