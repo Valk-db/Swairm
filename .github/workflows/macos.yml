@@ -96,7 +96,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Anchor + tooling dependencies
-        run: pip install numpy scikit-learn fastapi uvicorn huggingface_hub
+        run: pip install numpy scikit-learn fastapi uvicorn huggingface_hub prometheus-client
 
       - name: Download tiny MLX model
         run: |
@@ -198,7 +198,15 @@ jobs:
           curl -sf http://127.0.0.1:8000/status -o status.json
           cat status.json
           python -c "import json; s = json.load(open('status.json')); assert s['version'] >= 4, s; print('OK: version advanced to', s['version'])"
-
+      
+      - name: Verify /metrics is live (D14)
+        run: |
+          curl -sf http://127.0.0.1:8000/metrics -o metrics.txt
+          cat metrics.txt
+          grep -q '^fcs_current_version' metrics.txt
+          grep -q '^fcs_aggregation_rounds_total' metrics.txt
+          echo "OK: /metrics serving real gauges/counters, not the 503 no-op path"
+          
       - name: Show Anchor log
         if: always()
         run: cat anchor.log
