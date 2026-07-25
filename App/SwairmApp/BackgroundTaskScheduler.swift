@@ -36,19 +36,19 @@ struct BackgroundRoundResult: Codable {
 }
 
 /// Configuration for background training rounds.
-struct BackgroundTrainingConfig: Sendable {
-    let anchorURL: String
-    let deviceIndex: Int
-    let intervalSeconds: TimeInterval
-    let useMLXTrainer: Bool
-    let modelPath: String?
-    let curriculumDirectory: String?
-    let maxStepsPerRound: Int
-    let batchSize: Int
-    let sequenceLength: Int
-    let learningRate: Float
-    let minBatteryFraction: Float?
-    let hmacSecret: Data?
+struct BackgroundTrainingConfig: Codable, Sendable {
+    var anchorURL: String
+    var deviceIndex: Int
+    var intervalSeconds: TimeInterval
+    var useMLXTrainer: Bool
+    var modelPath: String?
+    var curriculumDirectory: String?
+    var maxStepsPerRound: Int
+    var batchSize: Int
+    var sequenceLength: Int
+    var learningRate: Float
+    var minBatteryFraction: Float?
+    var hmacSecret: Data?
 
     // No default host baked in on purpose: a hardcoded LAN IP silently
     // breaks (or worse, silently points at the wrong box) the moment the
@@ -262,7 +262,7 @@ final class BackgroundTaskScheduler {
 
         // Set expiration handler
         task.expirationHandler = { [weak self] in
-            os_log("BGAppRefreshTask expired", log: self?.log ?? logger, type: .warn)
+            os_log("BGAppRefreshTask expired", log: self?.log ?? logger, type: .error)
             self?.endBackgroundTask()
             self?.isBackgroundTaskRunning = false
         }
@@ -291,7 +291,7 @@ final class BackgroundTaskScheduler {
         }
 
         task.expirationHandler = { [weak self] in
-            os_log("BGProcessingTask expired", log: self?.log ?? logger, type: .warn)
+            os_log("BGProcessingTask expired", log: self?.log ?? logger, type: .error)
             self?.endBackgroundTask()
             self?.isBackgroundTaskRunning = false
         }
@@ -422,10 +422,10 @@ final class BackgroundTaskScheduler {
                 anchorVersion = result.status.version
             }
 
-        } catch {
-            error = error.localizedDescription
-            os_log("Background round %d failed: %@", log: log, type: .error, round, error as CVarArg)
-            throw error
+        } catch let caughtError {
+            error = caughtError.localizedDescription
+            os_log("Background round %d failed: %@", log: log, type: .error, round, caughtError as CVarArg)
+            throw caughtError
         }
 
         let result = BackgroundRoundResult(

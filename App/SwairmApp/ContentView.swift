@@ -166,7 +166,7 @@ struct ContentView: View {
         // Sync URL to background scheduler
         bgScheduler.anchorURLText = anchorURLText
         bgScheduler.config.deviceIndex = deviceIndex
-        bgScheduler.config.isMLXMode = useMLXTrainer
+        bgScheduler.config.useMLXTrainer = useMLXTrainer
         if useMLXTrainer {
             bgScheduler.config.modelPath = mlxController.modelPath
             bgScheduler.config.curriculumDirectory = mlxController.curriculumDirectory
