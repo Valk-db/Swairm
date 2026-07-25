@@ -397,7 +397,6 @@ public actor MLXTrainer: LocalTraining {
             // Apply gradients via optimizer
             if let optimizer = optimizer, let validGrads = grads {
                 optimizer.update(model: model!, gradients: validGrads)
-                eval(model!, loss)
             }
 
             // Update learning rate for next step
@@ -516,7 +515,6 @@ public actor MLXTrainer: LocalTraining {
         let (loss, grads) = gradFn(model, inputIds, labels)
 
         // Optimizer step happens once, in train()'s loop — don't apply it here too.
-        // eval(model, loss) is also called in train() after optimizer.update
 
         return (loss.item(Float.self), grads)
     }
