@@ -50,8 +50,13 @@ struct BackgroundTrainingConfig: Sendable {
     let minBatteryFraction: Float?
     let hmacSecret: Data?
 
+    // No default host baked in on purpose: a hardcoded LAN IP silently
+    // breaks (or worse, silently points at the wrong box) the moment the
+    // Anchor moves. Empty string fails the existing URL(string:) guard in
+    // executeTrainingRound/runBackgroundRoundNow with a clear
+    // "Invalid Anchor URL" error until the user sets one via anchorURLText.
     static let `default` = BackgroundTrainingConfig(
-        anchorURL: "http://192.168.1.100:8000",
+        anchorURL: "",
         deviceIndex: 0,
         intervalSeconds: 15 * 60,  // 15 minutes between background refreshes
         useMLXTrainer: false,

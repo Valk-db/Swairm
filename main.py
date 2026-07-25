@@ -462,6 +462,18 @@ try:
     async def lifespan(app):
         global main_loop
         main_loop = asyncio.get_running_loop()
+        # Security posture banner -- printed once at startup so it's always
+        # visible in server logs, regardless of how uvicorn was invoked.
+        # HMAC (D12) authenticates requests; it does NOT encrypt them. TLS
+        # is a separate flag on the uvicorn invocation (see module docstring).
+        if HMAC_SECRET:
+            print("[startup] HMAC auth: ENABLED (X-HMAC-Signature required on protected paths)")
+        else:
+            print("[startup] HMAC auth: DISABLED (FCS_HMAC_SECRET unset -- dev mode, requests unauthenticated)")
+        print("[startup] Transport encryption: NOT managed by this app -- "
+              "traffic is plaintext unless uvicorn was started with "
+              "--ssl-certfile/--ssl-keyfile. HMAC alone does not encrypt "
+              "adapter or curriculum payloads.")
         threading.Thread(target=worker_loop, daemon=True).start()
         yield
 

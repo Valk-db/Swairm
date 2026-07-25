@@ -114,3 +114,29 @@ Added optional Prometheus metrics to main.py (no hard dependency; no-op if prome
 - **Histograms**: upload size bytes, aggregation duration seconds
 - **Endpoint**: `GET /metrics` returns 503 if prometheus-client not installed, else `text/plain; version=0.0.4`
 - Worker loop (`drain_once`) updates gauges/counters/histograms on each aggregation pass
+
+## Open items (deliberately not decided)
+This section was dropped from the doc in the D10/D11 pass on 2026-07-25.
+Re-parked here; nothing below was actually resolved by D10-D14.
+- `detect_skew()` thresholds (`SKEW_*` in main.py) -- still untuned against
+  real fleet participation. The mlx-e2e CI job now runs 4 devices / 5
+  rounds (D10-D14 era), but that's still one CI runner simulating a fleet,
+  not independent real devices on real networks -- doesn't substitute for
+  real participation data.
+- `state.json` -> SQLite upgrade trigger (multi-writer or >dozen devices)
+  -- not evaluated.
+- Convex-proxy caveat from earlier entries is CLOSED: D10 proves real MLX
+  fine-tuning (not just the linear proxy) survives the aggregation scheme
+  end-to-end in CI. Left here as a resolved note, not reopened.
+- NEW: HMAC (D12) is request authenticity/integrity only, not transport
+  encryption. Adapter weights and curriculum data are plaintext on the
+  wire unless TLS is separately terminated (uvicorn --ssl-certfile /
+  --ssl-keyfile, see main.py docstring). Don't treat "HMAC is on" as
+  "traffic is encrypted."
+- NEW: D13's BGProcessingTask + real MLX/Metal training path is CI-unproven.
+  mlx-e2e proves the MLX training loop works when driven by
+  swairm-mlx-client on a macOS CI runner -- it does not prove Metal
+  executes reliably inside a backgrounded iOS app under BGProcessingTask's
+  execution constraints. That gap is exactly what surfaced as the phone
+  thermal/hotspot issue during the earlier Sideloadly test. Needs a real-
+  device background test before this is trusted, not just green CI.

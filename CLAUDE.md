@@ -47,9 +47,26 @@ MLXTrainer.swift: Fixed compilation bugs (3 bugs + throws signature):
 All fixes verified by green build-test CI.
 
 **P1 tasks completed (2026-07-25):**
-- TLS + HMAC auth on Anchor endpoints (main.py + AnchorClient.swift): HMAC-SHA256 on /upload, /adapter/latest, /curriculum/*, disabled when FCS_HMAC_SECRET unset (dev mode)
-- iOS background task scheduler (BackgroundTaskScheduler.swift): BGAppRefreshTask (30s) + BGProcessingTask (minutes), integrates with both Proxy and MLX training modes, battery/thermal checks via ResourceBudget
+- HMAC auth on Anchor endpoints (main.py + AnchorClient.swift): HMAC-SHA256 on /upload, /adapter/latest, /curriculum/*, disabled when FCS_HMAC_SECRET unset (dev mode). **Auth only, not encryption** -- see security note below.
+- iOS background task scheduler (BackgroundTaskScheduler.swift): BGAppRefreshTask (30s) + BGProcessingTask (minutes), integrates with both Proxy and MLX training modes, battery/thermal checks via ResourceBudget. **CI-unverified for real MLX training** -- see note below.
 - Prometheus /metrics endpoint on Anchor (main.py): counters/gauges/histograms for uploads, fetches, curriculum, aggregation rounds, quarantine; optional dependency (no-op if prometheus-client not installed)
+
+## Security posture (read before deploying off localhost)
+- D12's HMAC gives request authenticity/integrity, NOT transport
+  encryption. Adapter weights and curriculum shards travel in plaintext
+  unless TLS is separately terminated (`uvicorn ... --ssl-certfile
+  --ssl-keyfile`, see main.py docstring). The Anchor logs its HMAC/TLS
+  posture on startup (lifespan handler) -- check that log line before
+  trusting a deployment.
+- D13's background training path (BGProcessingTask running the real MLX
+  trainer) is only proven in the sense that the code compiles and the
+  linear-proxy path has run in background tasks before. The real-MLX
+  branch through Metal has NOT been exercised inside an actual
+  backgrounded iOS app -- mlx-e2e CI proves the trainer works when driven
+  from a macOS CLI, not under BGProcessingTask's execution/thermal
+  constraints on a physical phone. Treat it as unverified until tested on
+  real hardware; this is the same failure class as the earlier Sideloadly
+  thermal/hotspot issue. See "Open items" in DECISIONS.md.
 
 ## Ground rules
 - No local Mac. Never claim something compiles or is fixed without a
