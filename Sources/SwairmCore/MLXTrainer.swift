@@ -166,13 +166,16 @@ public struct MLXTrainerConfig: Sendable {
     /// client's job is to emit a consistent, explicit rank -- not to silently
     /// collapse a heterogeneous map to its max. Throws when the resolved
     /// ranks/scales disagree across target modules.
-    func resolvedRankScale() throws -> (rank: Int, scale: Float) {
-        let ranks = Set(targetModules.map { rank(for: $0) })
-        let scales = Set(targetModules.map { alpha(for: $0) })
+    /// - Parameter keys: the resolved, qualified module keys actually being
+    ///   adapted -- not the bare targetModules patterns, which never contain
+    ///   "attn"/"mlp" and would silently fall through to the fallback rank.
+    func resolvedRankScale(forKeys keys: [String]) throws -> (rank: Int, scale: Float) {
+        let ranks = Set(keys.map { rank(for: $0) })
+        let scales = Set(keys.map { alpha(for: $0) })
         guard ranks.count <= 1, scales.count <= 1 else {
             throw TrainingError.ambiguousAdapterConfig(
                 "LoRAContainer takes one rank/scale for all target modules, but "
-                + "targetModules \(targetModules) resolve to ranks \(ranks) / "
+                + "keys \(keys) resolve to ranks \(ranks) / "
                 + "scales \(scales). Per-module ranks (D6) are applied "
                 + "Anchor-side at aggregation, not on-device.")
         }
@@ -240,16 +243,6 @@ public actor MLXTrainer: LocalTraining {
         }()
         self.model = loadedModel
 
-        // Single rank/scale for the container (see resolvedRankScale): throws
-        // rather than silently collapsing a heterogeneous rankMap to its max.
-        let (rank, scale) = try config.resolvedRankScale()
-
-        // Adapt every transformer block the model exposes, not a hardcoded
-        // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
-        // true layer count adapts all blocks. Falls back to all layers when
-        // the model doesn't report a LoRAModel layer list.
-        let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
-
         // LoRAContainer.from matches `keys` by EXACT equality against
         // Module.namedModules() paths, not by suffix/substring -- despite
         // config.targetModules being bare names ("q_proj"). Real submodules
@@ -277,6 +270,19 @@ public actor MLXTrainer: LocalTraining {
             }
             resolvedKeys = matched
         }
+
+        // Single rank/scale for the container (see resolvedRankScale): throws
+        // rather than silently collapsing a heterogeneous rankMap to its max.
+        // Resolved against the qualified keys above (not the bare
+        // targetModules patterns), so the "attn"/"mlp" substring matching in
+        // rank(for:)/alpha(for:) has real qualified names to match against.
+        let (rank, scale) = try config.resolvedRankScale(forKeys: resolvedKeys ?? config.targetModules)
+
+        // Adapt every transformer block the model exposes, not a hardcoded
+        // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
+        // true layer count adapts all blocks. Falls back to all layers when
+        // the model doesn't report a LoRAModel layer list.
+        let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
 
         // Create LoRAConfiguration for DoRA
         let loraConfig = LoRAConfiguration(
@@ -407,6 +413,12 @@ public actor MLXTrainer: LocalTraining {
             try Task.checkCancellation()
         }
 
+        // Loop exits here once we've taken the full requested step count;
+        // nothing inside the loop above sets termination for that case.
+        if stepsCompleted >= config.maxStepsPerRound || stepsCompleted >= budget.maxSteps {
+            termination = .stepBudget
+        }
+
         let wallClock = Date().timeIntervalSince(startTime)
         return TrainingReport(
             stepsCompleted: stepsCompleted,
@@ -427,7 +439,7 @@ public actor MLXTrainer: LocalTraining {
         // Group parameters by layer name
         var layerParams: [String: (A: MLXArray?, B: MLXArray?, M: MLXArray?)] = [:]
 
-        for (name, array) in container.parameters {
+        for (name, tensor) in container.parameters.flattened() {
             // Parse layer name from parameter key
             // Keys look like: "layers.0.attention.q_proj.lora_a", "layers.0.attention.q_proj.lora_b", "layers.0.attention.q_proj.m"
             let parts = name.split(separator: ".")
@@ -436,13 +448,11 @@ public actor MLXTrainer: LocalTraining {
                 let paramType = String(parts.last!)
 
                 var params = layerParams[layerName] ?? (nil, nil, nil)
-                if case .value(let tensor) = array {
-                    switch paramType {
-                    case "lora_a": params.0 = tensor
-                    case "lora_b": params.1 = tensor
-                    case "m": params.2 = tensor
-                    default: break
-                    }
+                switch paramType {
+                case "lora_a": params.0 = tensor
+                case "lora_b": params.1 = tensor
+                case "m": params.2 = tensor
+                default: break
                 }
                 layerParams[layerName] = params
             }

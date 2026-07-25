@@ -93,7 +93,7 @@ public actor ProxyDeviceLoop {
     public let deviceIndex: Int
     public let config: ProxyLoopConfig
     /// Exposed so fleet drivers (the CLI) can compute fleet-average targets.
-    public let target: ProxyDeviceTarget
+    public nonisolated let target: ProxyDeviceTarget
 
     private let anchor: AnchorConnecting
     private let trainer: LinearProxyTrainer
