@@ -201,7 +201,6 @@ public actor MLXTrainer: LocalTraining {
     private var loraContainer: LoRAContainer?
     private var optimizer: AdamW?
     private var stepCount = 0
-    private var curriculumLoader: CurriculumLoader?
 
     // For wire-format adapter application
     private let adapterManager = AdapterManager()
@@ -226,101 +225,109 @@ public actor MLXTrainer: LocalTraining {
     // -------------------------------------------------------------------------
 
     /// Load base model, inject DoRA layers via MLX LoRAContainer, apply global adapter if provided.
+    ///
+    /// The base checkpoint on disk never changes between rounds, so the
+    /// disk load + LoRA structure injection below only run once per device
+    /// (guarded by `model == nil`), not once per federated round. At 4
+    /// devices x 5 rounds this was 20 full model reloads where 4 (one per
+    /// device) are actually needed -- confirmed via mlx-e2e on 2026-07-25:
+    /// real rounds were completing (anchor.log showed successful
+    /// aggregation), just slowly, because every round paid this cost again.
+    /// `applyGlobalAdapter` below still runs every round regardless -- that
+    /// overwrites parameter VALUES in place, which is all D7's "full
+    /// replace semantics" requires; it never needed the container rebuilt.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
-        // Load base model from local directory via MLXLMCommon
-        let modelDirectory = URL(fileURLWithPath: config.modelPath)
-        let loadedModel: any LanguageModel = try await {
-            // Use LLMModelFactory directly rather than the free-function
-            // MLXLMCommon loadModel: the latter resolves a factory through the
-            // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
-            // throws noModelFactoryAvailable when the MLXLLM ObjC class isn't
-            // realized yet. Calling the concrete factory's own load(from:using:)
-            // bypasses the registry entirely.
-            let context = try await LLMModelFactory.shared.load(
-                from: modelDirectory,
-                using: LocalTokenizerLoader()
-            )
-            return context.model
-        }()
-        self.model = loadedModel
+        if model == nil {
+            // Load base model from local directory via MLXLMCommon
+            let modelDirectory = URL(fileURLWithPath: config.modelPath)
+            let loadedModel: any LanguageModel = try await {
+                // Use LLMModelFactory directly rather than the free-function
+                // MLXLMCommon loadModel: the latter resolves a factory through the
+                // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
+                // throws noModelFactoryAvailable when the MLXLLM ObjC class isn't
+                // realized yet. Calling the concrete factory's own load(from:using:)
+                // bypasses the registry entirely.
+                let context = try await LLMModelFactory.shared.load(
+                    from: modelDirectory,
+                    using: LocalTokenizerLoader()
+                )
+                return context.model
+            }()
+            self.model = loadedModel
 
-        // LoRAContainer.from matches `keys` by EXACT equality against
-        // Module.namedModules() paths, not by suffix/substring -- despite
-        // config.targetModules being bare names ("q_proj"). Real submodules
-        // are nested ("self_attn.q_proj", "mlp.gate_proj"), so the bare
-        // names never matched: replaceLayers() adapted zero layers,
-        // model.freeze() (called inside LoRAContainer.from) left the whole
-        // model frozen, and the `grad` transform in forwardBackward() then
-        // saw zero trainable parameters -- "[grad] Must specify at least
-        // one argument." Resolve the bare names to their qualified keys
-        // here by suffix so the intended target set (D6: q/v attn + all
-        // mlp) is what actually gets adapted, and fail fast with a clear
-        // error if a future base model's module names don't match any of
-        // targetModules, instead of the opaque MLX-side trap.
-        let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
-        var resolvedKeys: [String]? = nil
-        if !config.targetModules.isEmpty {
-            let matched = availableKeys.filter { key in
-                config.targetModules.contains { key == $0 || key.hasSuffix("." + $0) }
+            // LoRAContainer.from matches `keys` by EXACT equality against
+            // Module.namedModules() paths, not by suffix/substring -- despite
+            // config.targetModules being bare names ("q_proj"). Real submodules
+            // are nested ("self_attn.q_proj", "mlp.gate_proj"), so the bare
+            // names never matched: replaceLayers() adapted zero layers,
+            // model.freeze() (called inside LoRAContainer.from) left the whole
+            // model frozen, and the `grad` transform in forwardBackward() then
+            // saw zero trainable parameters -- "[grad] Must specify at least
+            // one argument." Resolve the bare names to their qualified keys
+            // here by suffix so the intended target set (D6: q/v attn + all
+            // mlp) is what actually gets adapted, and fail fast with a clear
+            // error if a future base model's module names don't match any of
+            // targetModules, instead of the opaque MLX-side trap.
+            let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
+            var resolvedKeys: [String]? = nil
+            if !config.targetModules.isEmpty {
+                let matched = availableKeys.filter { key in
+                    config.targetModules.contains { key == $0 || key.hasSuffix("." + $0) }
+                }
+                guard !matched.isEmpty else {
+                    throw TrainingError.ambiguousAdapterConfig(
+                        "targetModules \(config.targetModules) matched none of "
+                        + "the model's module keys \(availableKeys) -- adapter "
+                        + "would train zero parameters.")
+                }
+                resolvedKeys = matched
             }
-            guard !matched.isEmpty else {
-                throw TrainingError.ambiguousAdapterConfig(
-                    "targetModules \(config.targetModules) matched none of "
-                    + "the model's module keys \(availableKeys) -- adapter "
-                    + "would train zero parameters.")
-            }
-            resolvedKeys = matched
+
+            // Single rank/scale for the container (see resolvedRankScale): throws
+            // rather than silently collapsing a heterogeneous rankMap to its max.
+            // Resolved against the qualified keys above (not the bare
+            // targetModules patterns), so the "attn"/"mlp" substring matching in
+            // rank(for:)/alpha(for:) has real qualified names to match against.
+            let (rank, scale) = try config.resolvedRankScale(forKeys: resolvedKeys ?? config.targetModules)
+
+            // Adapt every transformer block the model exposes, not a hardcoded
+            // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
+            // true layer count adapts all blocks. Falls back to all layers when
+            // the model doesn't report a LoRAModel layer list.
+            let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
+
+            // Create LoRAConfiguration for DoRA
+            let loraConfig = LoRAConfiguration(
+                numLayers: numLayers,
+                fineTuneType: .dora,
+                loraParameters: LoRAConfiguration.LoRAParameters(
+                    rank: rank,
+                    scale: scale,
+                    keys: resolvedKeys
+                )
+            )
+
+            // Inject DoRA layers using MLX's LoRAContainer
+            self.loraContainer = try LoRAContainer.from(
+                model: loadedModel,
+                configuration: loraConfig
+            )
+
+            // Explicitly load the container into the model to ensure trainable
+            // parameters (LoRA adapters) are tracked by the model. LoRAContainer.from
+            // mutates the model in place, but the documented pattern calls load(into:)
+            // to make parameter tracking reliable after any subsequent updates.
+            try self.loraContainer?.load(into: loadedModel)
         }
 
-        // Single rank/scale for the container (see resolvedRankScale): throws
-        // rather than silently collapsing a heterogeneous rankMap to its max.
-        // Resolved against the qualified keys above (not the bare
-        // targetModules patterns), so the "attn"/"mlp" substring matching in
-        // rank(for:)/alpha(for:) has real qualified names to match against.
-        let (rank, scale) = try config.resolvedRankScale(forKeys: resolvedKeys ?? config.targetModules)
-
-        // Adapt every transformer block the model exposes, not a hardcoded
-        // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
-        // true layer count adapts all blocks. Falls back to all layers when
-        // the model doesn't report a LoRAModel layer list.
-        let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
-
-        // Create LoRAConfiguration for DoRA
-        let loraConfig = LoRAConfiguration(
-            numLayers: numLayers,
-            fineTuneType: .dora,
-            loraParameters: LoRAConfiguration.LoRAParameters(
-                rank: rank,
-                scale: scale,
-                keys: resolvedKeys
-            )
-        )
-
-        // Inject DoRA layers using MLX's LoRAContainer
-        self.loraContainer = try LoRAContainer.from(
-            model: loadedModel,
-            configuration: loraConfig
-        )
-
-        // Explicitly load the container into the model to ensure trainable
-        // parameters (LoRA adapters) are tracked by the model. LoRAContainer.from
-        // mutates the model in place, but the documented pattern calls load(into:)
-        // to make parameter tracking reliable after any subsequent updates.
-        try self.loraContainer?.load(into: loadedModel)
-
-        // Apply global adapter if provided (from Anchor)
+        // Apply global adapter if provided (from Anchor). Runs every round,
+        // first or not: on round 0 there's usually no global adapter yet
+        // (nil -> the freshly-initialized LoRA weights from injection above
+        // are used as-is); on later rounds this resets whatever this device
+        // trained locally last round back to the aggregated consensus,
+        // which is the actual per-round state D7 cares about.
         if let global = globalAdapter {
             try applyGlobalAdapter(global)
-        }
-
-        // Collect trainable parameters from allDoRA layers
-        var trainableParams: [String: MLXArray] = [:]
-        if let container = loraContainer {
-            for (key, item) in container.parameters {
-                if case .value(let array) = item {
-                    trainableParams[key] = array
-                }
-            }
         }
 
         // Create optimizer with trainable parameters (fresh each round - D7: full replace semantics)
@@ -328,16 +335,6 @@ public actor MLXTrainer: LocalTraining {
             learningRate: config.learningRate,
             weightDecay: config.weightDecay
         )
-
-        // Initialize curriculum loader if directory provided
-        if let curriculumDir = config.curriculumDirectory {
-            let url = URL(fileURLWithPath: curriculumDir)
-            self.curriculumLoader = try CurriculumLoader(
-                directory: url,
-                batchSize: config.batchSize,
-                sequenceLength: config.sequenceLength
-            )
-        }
 
         self.stepCount = 0
     }
