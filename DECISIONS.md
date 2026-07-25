@@ -70,10 +70,20 @@ soft map {(epoch-1, epoch): EPOCH_TRANSITION_WEIGHT=0.25}; epochs older
 than one step remain hard-rejected. Env override:
 FCS_EPOCH_TRANSITION_WEIGHT. (validate_open_configs.py, exp 2)
 
-## Open items (deliberately not decided)
-- detect_skew() thresholds (SKEW_* in main.py) -- heuristics untuned
-  until real fleet participation data exists
-- state.json -> SQLite upgrade trigger (multi-writer or >dozen devices)
-- Convex-proxy caveat: all simulation evidence assumes a linear training
-  proxy; real MLX fine-tuning may punish staleness differently. Only real
-  on-device training closes this.
+## D10. MLX LoRAContainer rank resolution: uniform max-rank on-device, per-module SVD truncation at Anchor
+MLX's LoRAContainer applies ONE rank/scale to ALL matched keys via
+LoRAContainer.createReplacementLayer. On-device uses uniform rank=6
+(max of D6's per-module map: attn=4, mlp=6) uniformly. Per-module ranks
+(attn=4, mlp=6) are enforced Anchor-side via randomized SVD truncation
+in aggregate_module(). Evidence: mlx-e2e CI job (macos-26) passes end-to-end
+with real MLX DoRA training and Anchor aggregation.
+(Fixing rankMap from ["attn": 4, "mlp": 6] -> ["": 6] in swairm-mlx-client/main.swift,
+anchor aggregator truncates via SVD per D1/D6.)
+
+## D11. MLXTrainer compilation fixes (2026-07-25)
+Fixed 4 compilation issues in Sources/SwairmCore/MLXTrainer.swift:
+1. Line 400: Removed `eval(model!, loss)` — no such function exists in MLX Swift
+2. Line 519: Removed stale comment referencing removed eval() call
+3. Line 524: Added `throws` to `decodeBatch()` + batch-size validation (throws on mismatch)
+4. Line 391: Added `try` at call site
+Verified by green build-test CI run (30144782107).

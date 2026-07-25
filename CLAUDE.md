@@ -24,17 +24,27 @@ there (e.g. agreement/relevance weighting, D3).
 - Real on-device MLX training loop: THE ACTIVE FRONTIER, see below.
 
 ## Where things stand right now
-All three CI jobs are green as of HEAD (build-test, integration,
-sideload-ipa) — the iOS app build was fixed in 3e18cea and has stayed
-fixed. The one interim failure (b99e002) was build-test, not
-sideload-ipa: orientation tests that needed the MLX/Metal runtime
-under `swift test` (XCTest can't load the default metallib on the
-runner). Fixed in d005fe3 by making those tests MLX-runtime-free.
+All four CI jobs are green as of HEAD (build-test, integration,
+sideload-ipa, mlx-e2e) — the iOS app build was fixed in 3e18cea and has
+stayed fixed. The one interim failure (b99e002) was build-test, not
+sideload-ipa: orientation tests that needed the MLX/Metal runtime under
+`swift test` (XCTest can't load the default metallib on the runner).
+Fixed in d005fe3 by making those tests MLX-runtime-free.
 
 swairm-mlx-client (real on-device MLX DoRA fleet driver) and
-tools/make_curriculum.py now exist but no CI job runs them — real
-on-device MLX training is implemented but not yet proven end-to-end
-in CI. That's the actual active frontier now, see next section.
+tools/make_curriculum.py are now proven end-to-end in CI via the
+mlx-e2e job (macos-26 runner). The MLX LoRAContainer rank-resolution
+mismatch (per-module ranks on-device vs. uniform container rank) is
+resolved: on-device uses uniform rank=6 (max of D6's map) with
+Anchor-side SVD truncation to per-module ranks (attn=4, mlp=6).
+Real on-device MLX training is now validated end-to-end in CI.
+
+MLXTrainer.swift: Fixed compilation bugs (3 bugs + throws signature):
+- Line 400: Removed non-existent `eval(model!, loss)` call (no such function in MLX)
+- Line 519: Removed stale comment referencing the removed eval() call
+- Line 524: Added `throws` to `decodeBatch()` with batch-size validation
+- Line 391: Added `try` at call site
+All fixes verified by green build-test CI.
 
 ## Ground rules
 - No local Mac. Never claim something compiles or is fixed without a
