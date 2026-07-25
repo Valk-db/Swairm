@@ -98,8 +98,7 @@ public final class AnchorClient: AnchorConnecting {
         return UploadReceipt(queuedID: "")
     }
 
-------------------------------------------------- curriculum download
-
+    // ------------------------------------------------------------- curriculum download
     /// Fetch manifest for a curriculum epoch.
     public func fetchManifest(epoch: Int) async throws -> CurriculumManifest {
         let (data, http) = try await request(path: "/curriculum/\(epoch)/manifest", method: "GET", body: nil)
