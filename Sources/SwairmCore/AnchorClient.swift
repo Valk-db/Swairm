@@ -2,12 +2,18 @@
 //   GET  /status          -> JSON status
 //   GET  /adapter/latest  -> npz bytes + X-Adapter-Version header (404 = none yet)
 //   POST /upload          -> raw npz body, no parsing server-side
+//   GET  /curriculum/{epoch}/manifest -> JSON manifest
+//   GET  /curriculum/{epoch}/{shard}  -> npz bytes + X-Shard-SHA256 header
 //
 // Fully non-blocking (no semaphores): safe from UI code and iOS background
 // task runners. Conforms to AnchorConnecting so orchestration and tests can
 // substitute mock transports.
+//
+// HMAC-SHA256 signing (when secret provided): X-HMAC-Signature: sha256=<hex>
+// Signature = HMAC-SHA256(secret, METHOD\nPATH\nBODY)
 
 import Foundation
+import CommonCrypto
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -27,14 +33,22 @@ public enum AnchorClientError: Error {
     case httpStatus(Int)
     /// The Anchor does not expose this endpoint yet (e.g. curriculum download).
     case unsupported(String)
+    /// HMAC secret not configured but required by server.
+    case hmacRequired
+    /// HMAC signature verification failed.
+    case hmacInvalid
 }
 
 public final class AnchorClient: AnchorConnecting {
     public let base: URL
     private let session: URLSession
+    private let hmacSecret: Data?
 
-    public init(base: URL) {
+    /// Initialize with optional HMAC secret for request signing.
+    /// When nil (default), no HMAC signature is sent (dev mode).
+    public init(base: URL, hmacSecret: Data? = nil) {
         self.base = base
+        self.hmacSecret = hmacSecret
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 15
         self.session = URLSession(configuration: cfg)
@@ -92,6 +106,44 @@ public final class AnchorClient: AnchorConnecting {
             "the Anchor exposes no curriculum endpoint yet (epoch \(epoch))")
     }
 
+    // ------------------------------------------------------------- curriculum download
+
+    /// Fetch manifest for a curriculum epoch.
+    public func fetchManifest(epoch: Int) async throws -> CurriculumManifest {
+        let (data, http) = try await request(path: "/curriculum/\(epoch)/manifest", method: "GET", body: nil)
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                throw CurriculumError.manifestNotFound(epoch)
+            }
+            throw AnchorClientError.httpStatus(http.statusCode)
+        }
+        return try JSONDecoder().decode(CurriculumManifest.self, from: data)
+    }
+
+    /// Stream a single shard to disk, validating SHA256 after download.
+    public func downloadShard(epoch: Int, shardName: String, to destination: URL) async throws -> URL {
+        // Validate shard name to prevent path traversal
+        if shardName.contains("..") || shardName.contains("/") || shardName.contains("\\") {
+            throw CurriculumError.invalidShardName(shardName)
+        }
+        let (data, http) = try await request(path: "/curriculum/\(epoch)/\(shardName)", method: "GET", body: nil)
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                throw CurriculumError.shardNotFound(epoch, shardName)
+            }
+            throw AnchorClientError.httpStatus(http.statusCode)
+        }
+        // Validate SHA256 if provided in header
+        if let expectedSHA = headerValue("X-Shard-SHA256", in: http) {
+            let actualSHA = computeSHA256(data)
+            if actualSHA != expectedSHA {
+                throw CurriculumError.integrityCheckFailed(expected: expectedSHA, actual: actualSHA)
+            }
+        }
+        try data.write(to: destination, options: .atomic)
+        return destination
+    }
+
     // ------------------------------------------------------------- internals
 
     private func makeURL(_ path: String) -> URL? {
@@ -111,7 +163,28 @@ public final class AnchorClient: AnchorConnecting {
             req.httpBody = body
             req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         }
+        // Add HMAC signature if secret is configured
+        if let secret = hmacSecret {
+            let bodyForSig = body ?? Data()
+            let canonical = "\(method)\n\(path)\n".data(using: .utf8)! + bodyForSig
+            let signature = hmacSHA256(secret, canonical)
+            req.setValue("sha256=\(signature)", forHTTPHeaderField: "X-HMAC-Signature")
+        }
         return try await perform(req)
+    }
+
+    /// Compute HMAC-SHA256 signature
+    private func hmacSHA256(_ key: Data, _ data: Data) -> String {
+        var hmac = [UInt8](repeating: 0, count: 32)
+        key.withUnsafeBytes { keyPtr in
+            data.withUnsafeBytes { dataPtr in
+                CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256),
+                       keyPtr.baseAddress, key.count,
+                       dataPtr.baseAddress, data.count,
+                       &hmac)
+            }
+        }
+        return hmac.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Continuation-based bridge over dataTask: non-blocking and portable
@@ -140,6 +213,12 @@ public final class AnchorClient: AnchorConnecting {
             }
         }
         return nil
+    }
+
+    private func computeSHA256(_ data: Data) -> String {
+        var hash = [UInt8](repeating: 0, count: 32)
+        data.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash) }
+        return hash.map { String(format: "%02x", $0) }.joined()
     }
 }
 

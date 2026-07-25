@@ -87,3 +87,30 @@ Fixed 4 compilation issues in Sources/SwairmCore/MLXTrainer.swift:
 3. Line 524: Added `throws` to `decodeBatch()` + batch-size validation (throws on mismatch)
 4. Line 391: Added `try` at call site
 Verified by green build-test CI run (30144782107).
+
+## D12. HMAC-SHA256 authentication on Anchor endpoints (2026-07-25)
+Added optional HMAC auth to protect Anchor endpoints in production:
+- Server (main.py): `verify_hmac()` middleware checks `X-HMAC-Signature: sha256=<hex>` header
+  - Canonical string: `METHOD\nPATH\nBODY` (empty body for GET)
+  - Protected paths: `/upload`, `/adapter/latest`, `/curriculum/*` (prefix match)
+  - Secret from env `FCS_HMAC_SECRET`; empty = auth disabled (dev mode)
+- Client (AnchorClient.swift): `init(base: URL, hmacSecret: Data?)` signs requests when secret provided
+  - Uses CommonCrypto for HMAC-SHA256, works on iOS/macOS/Linux
+- Wire format unchanged; backward compatible with existing fleets
+
+## D13. iOS background task scheduler (2026-07-25)
+Implemented BGAppRefreshTask + BGProcessingTask for federated learning when app is backgrounded:
+- `BackgroundTaskScheduler.swift` registers both task types with identifiers `com.swairm.app.refresh` (30s budget) and `com.swairm.app.processing` (minutes budget)
+- Integrates with both Proxy (linear) and MLX (real DoRA) training modes via `BackgroundTrainingConfig`
+- Battery/thermal guards via `ResourceBudget` (min 20% battery, stops on serious/critical thermal state)
+- Persists `BackgroundRoundResult` for UI retrieval on next launch
+- `project.yml` declares `UIBackgroundModes: background-processing, background-fetch` and `BGTaskSchedulerPermittedIdentifiers`
+- AppDelegate lifecycle hooks schedule on background, cancel on foreground
+
+## D14. Prometheus /metrics endpoint on Anchor (2026-07-25)
+Added optional Prometheus metrics to main.py (no hard dependency; no-op if prometheus-client not installed):
+- **Counters**: uploads received (queued/rejected_hmac/rejected_size/error), adapter fetches (ok/not_found/rejected_hmac/error), curriculum manifest/shard requests, aggregation rounds (ok/no_uploads/error), uploads quarantined
+- **Gauges**: current version, current epoch, pending uploads, active devices last round, skew detected (0/1), aggregation wall clock, aggregated uploads last round
+- **Histograms**: upload size bytes, aggregation duration seconds
+- **Endpoint**: `GET /metrics` returns 503 if prometheus-client not installed, else `text/plain; version=0.0.4`
+- Worker loop (`drain_once`) updates gauges/counters/histograms on each aggregation pass

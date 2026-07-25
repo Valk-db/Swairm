@@ -5,6 +5,7 @@ import MLXOptimizers
 import MLXLinalg
 import MLXLMCommon
 import MLXLLM
+import MLXRandom
 import Tokenizers
 
 // MARK: - Local Tokenizer Loader
@@ -81,7 +82,7 @@ public struct MLXTrainerConfig: Sendable {
     public let modelPath: String
     /// Target module name patterns to adapt (e.g., ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"])
     public let targetModules: [String]
-    /// LoRA rank per module pattern (default: attn=4, mlp=6 per aggregator.py DEFAULT_RANK_MAP)
+    /// LoRA rank per module pattern (default: uniform rank 6 for all target modules; per-module ranks attn=4, mlp=6 enforced Anchor-side via SVD truncation in aggregator.py DEFAULT_RANK_MAP)
     public let rankMap: [String: Int]
     /// LoRA alpha per module pattern (scaling = alpha / rank)
     public let alphaMap: [String: Float]
@@ -107,14 +108,8 @@ public struct MLXTrainerConfig: Sendable {
     public init(
         modelPath: String = "models/Qwen2-0.5B-Instruct-4bit",
         targetModules: [String] = ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-        rankMap: [String: Int] = [
-            "attn": 4,      // q_proj, k_proj, v_proj, o_proj
-            "mlp": 6        // gate_proj, up_proj, down_proj
-        ],
-        alphaMap: [String: Float] = [
-            "attn": 16.0,
-            "mlp": 16.0
-        ],
+        rankMap: [String: Int] = ["": 6],   // uniform rank 6 (max of D6's attn=4, mlp=6); per-module ranks enforced Anchor-side via SVD truncation
+        alphaMap: [String: Float] = ["": 16.0],  // uniform alpha 16 -> scale = 16/6
         learningRate: Float = 1e-4,
         weightDecay: Float = 0.01,
         maxGradNorm: Float = 1.0,
@@ -142,18 +137,14 @@ public struct MLXTrainerConfig: Sendable {
 
     /// Resolve rank for a module name.
     func rank(for moduleName: String) -> Int {
-        for (pattern, rank) in rankMap {
-            if moduleName.contains(pattern) { return rank }
-        }
-        return 4 // fallback
+        // With uniform rankMap ["": rank], all modules resolve to the same rank
+        return rankMap[""] ?? 4
     }
 
     /// Resolve alpha for a module name.
     func alpha(for moduleName: String) -> Float {
-        for (pattern, alpha) in alphaMap {
-            if moduleName.contains(pattern) { return alpha }
-        }
-        return 16.0 // fallback
+        // With uniform alphaMap ["": alpha], all modules resolve to the same alpha
+        return alphaMap[""] ?? 16.0
     }
 
     /// Single rank/scale for the whole LoRAContainer.
@@ -179,7 +170,7 @@ public struct MLXTrainerConfig: Sendable {
                 + "scales \(scales). Per-module ranks (D6) are applied "
                 + "Anchor-side at aggregation, not on-device.")
         }
-        return (ranks.first ?? 4, scales.first ?? 16.0)
+        return (ranks.first ?? 6, scales.first ?? 16.0)
     }
 }
 
@@ -216,8 +207,19 @@ public actor MLXTrainer: LocalTraining {
     // For wire-format adapter application
     private let adapterManager = AdapterManager()
 
+    // Logging
+    private var logBuffer: [String] = []
+    private let maxLogEntries = 200
+
     public init(config: MLXTrainerConfig = MLXTrainerConfig()) {
         self.config = config
+    }
+
+    // Simple internal logging
+    private func appendLog(_ message: String) {
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        logBuffer.append("[\(timestamp)] \(message)")
+        if logBuffer.count > maxLogEntries { logBuffer.removeFirst(logBuffer.count - maxLogEntries) }
     }
 
     // -------------------------------------------------------------------------
@@ -322,7 +324,7 @@ public actor MLXTrainer: LocalTraining {
             }
         }
 
-        // Create optimizer with trainable parameters
+        // Create optimizer with trainable parameters (fresh each round - D7: full replace semantics)
         self.optimizer = AdamW(
             learningRate: config.learningRate,
             weightDecay: config.weightDecay
@@ -357,12 +359,13 @@ public actor MLXTrainer: LocalTraining {
         var finalLoss: Float?
         var termination: TerminationReason = .exhaustedBatches
 
-        // Cosine LR schedule with warmup
-        func currentLR(step: Int) -> Float {
-            if step < config.warmupSteps {
-                return config.learningRate * Float(step + 1) / Float(config.warmupSteps)
+        // Cosine LR schedule with warmup — uses actual step count (may be less than maxStepsPerRound due to budget)
+        func currentLR(actualStep: Int) -> Float {
+            if actualStep < config.warmupSteps {
+                return config.learningRate * Float(actualStep + 1) / Float(config.warmupSteps)
             }
-            let progress = Float(step - config.warmupSteps) / Float(max(1, config.maxStepsPerRound - config.warmupSteps))
+            let totalDecaySteps = max(1, config.maxStepsPerRound - config.warmupSteps)
+            let progress = Float(actualStep - config.warmupSteps) / Float(totalDecaySteps)
             return config.learningRate * 0.5 * (1 + cos(Float.pi * min(progress, 1)))
         }
 
@@ -388,19 +391,41 @@ public actor MLXTrainer: LocalTraining {
             }
 
             // Decode batch data
-            let (inputIds, labels) = try decodeBatch(batch.data)
+            let (inputIds, labels): (MLXArray, MLXArray)
+            do {
+                (inputIds, labels) = try decodeBatch(batch.data)
+            } catch {
+                // Log and skip malformed batch; don't crash the entire round
+                appendLog("Batch decode failed, skipping: \(error)")
+                continue
+            }
 
             // Forward + backward pass
             let (loss, grads) = try await forwardBackward(inputIds: inputIds, labels: labels)
 
-            // Gradient clipping (MLXOptimizers handles internally)
+            // Gradient clipping by global norm (MLXOptimizers.AdamW does NOT clip internally)
+            var clippedGrads = grads
+            if let grads = grads, config.maxGradNorm > 0 {
+                var totalNormSq: Float = 0
+                for (_, grad) in grads.flattened() {
+                    totalNormSq += grad.square().sum().item(Float.self)
+                }
+                let totalNorm = sqrt(totalNormSq)
+                let clipCoef = config.maxGradNorm / (totalNorm + 1e-6)
+                if clipCoef < 1 {
+                    clippedGrads = ModuleParameters.unflattened(
+                        grads.flattened().mapValues { $0 * clipCoef }
+                    )
+                }
+            }
+
             // Apply gradients via optimizer
-            if let optimizer = optimizer, let validGrads = grads {
+            if let optimizer = optimizer, let validGrads = clippedGrads {
                 optimizer.update(model: model!, gradients: validGrads)
             }
 
             // Update learning rate for next step
-            optimizer?.learningRate = currentLR(step: stepCount)
+            optimizer?.learningRate = currentLR(actualStep: stepCount)
 
             // Update step counter
             stepCount += 1
@@ -504,9 +529,9 @@ public actor MLXTrainer: LocalTraining {
         guard let model = model else { throw TrainingError.notPrepared }
 
         // valueAndGrad closure must take (model, input, labels) and return loss
-        let gradFn = valueAndGrad(model: model) { model, x, y in
-            let lm = model as! any LanguageModel
-            let logits = lm(x, cache: nil)
+        // Pass model as explicit argument to avoid capturing the `var model` reference
+        let gradFn = valueAndGrad { (model: any LanguageModel, x: MLXArray, y: MLXArray) in
+            let logits = model(x, cache: nil)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = y.reshaped(-1)
             return crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)
@@ -555,5 +580,120 @@ public actor MLXTrainer: LocalTraining {
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
         return array.flattened().asType(.float32).asArray(Float.self)
+    }
+}
+
+// ============================================================================
+// MARK: - Checkpointing
+// ============================================================================
+
+extension MLXTrainer {
+
+    /// Save training checkpoint to an NPZ file.
+    /// Contains: step count, LoRA parameters, model parameters, RNG state.
+    public func saveCheckpoint(to url: URL) async throws {
+        guard let container = loraContainer, let model = model else {
+            throw TrainingError.notPrepared
+        }
+
+        var arrays: [(String, NPYArray)] = []
+
+        // 1. Step count as NPYArray (uint64 in little-endian)
+        var stepCountVal = UInt64(stepCount)
+        let stepCountData = withUnsafeBytes(of: &stepCountVal) { Data($0) }
+        let stepCountArray = NPYArray(descr: "|u8", shape: [1], raw: stepCountData)
+        arrays.append(("step_count", stepCountArray))
+
+        // 2. LoRA parameters (flattened)
+        let loraParams = container.parameters.flattened()
+        for (name, tensor) in loraParams {
+            let flat = tensor.flattened().asType(.float32)
+            let floats = flat.asArray(Float.self)
+            let shape = tensor.shape
+            let array = MLXArray(floats, shape).asType(.float32)
+            let npyArray = try NPYArray.fromMLXArray(array)
+            arrays.append(("lora_\(name)", npyArray))
+        }
+
+        // 3. Save model parameters (allows optimizer re-initialization on resume)
+        let modelParams = try getModelParameters()
+        for (name, tensor) in modelParams.flattened() {
+            let flat = tensor.flattened().asType(.float32)
+            let floats = flat.asArray(Float.self)
+            let shape = tensor.shape
+            let array = MLXArray(floats, shape).asType(.float32)
+            let npyArray = try NPYArray.fromMLXArray(array)
+            arrays.append(("model_\(name)", npyArray))
+        }
+
+        // 4. Save RNG state if available
+        if let rngState = MLXRandom.state {
+            let rngArray = NPYArray(descr: "|u1", shape: [rngState.count], raw: rngState)
+            arrays.append(("rng_state", rngArray))
+        }
+
+        let data = try NPZ.write(arrays)
+        try data.write(to: url, options: .atomic)
+        appendLog("Saved checkpoint to \(url.lastPathComponent) (step \(stepCount))")
+    }
+
+    /// Load training checkpoint from an NPZ file.
+    /// Restores: step count, LoRA parameters, model parameters, RNG state.
+    public func loadCheckpoint(from url: URL) async throws {
+        guard let container = loraContainer, let model = model else {
+            throw TrainingError.notPrepared
+        }
+
+        let data = try Data(contentsOf: url)
+        let dict = try NPZ.read(data)
+
+        // 1. Restore step count
+        if let stepCountArray = dict["step_count"],
+           stepCountArray.shape.count == 1,
+           stepCountArray.shape[0] == 1,
+           stepCountArray.descr == "|u8" {
+            let value = stepCountArray.raw.withUnsafeBytes { $0.load(as: UInt64.self) }
+            self.stepCount = Int(value)
+        }
+
+        // 2. Restore LoRA parameters
+        var loraParams: [String: MLXArray] = [:]
+        for (key, npyArray) in dict where key.hasPrefix("lora_") {
+            let paramName = String(key.dropFirst(5)) // remove "lora_"
+            let floats = try npyArray.floats()
+            let array = MLXArray(floats, npyArray.shape).asType(.float32)
+            loraParams[paramName] = array
+        }
+        if !loraParams.isEmpty {
+            let params = ModuleParameters.unflattened(loraParams)
+            try model.update(parameters: params, verify: .noUnusedKeys)
+        }
+
+        // 3. Restore model parameters (includes optimizer-implicit state)
+        var modelParams: [String: MLXArray] = [:]
+        for (key, npyArray) in dict where key.hasPrefix("model_") {
+            let paramName = String(key.dropFirst(6)) // remove "model_"
+            let floats = try npyArray.floats()
+            let array = MLXArray(floats, npyArray.shape).asType(.float32)
+            modelParams[paramName] = array
+        }
+        if !modelParams.isEmpty {
+            let params = ModuleParameters.unflattened(modelParams)
+            try model.update(parameters: params, verify: .noUnusedKeys)
+        }
+
+        // 4. Restore RNG state
+        if let rngArray = dict["rng_state"],
+           rngArray.descr == "|u1" {
+            MLXRandom.state = rngArray.raw
+        }
+
+        appendLog("Loaded checkpoint from \(url.lastPathComponent) (step \(stepCount))")
+    }
+
+    /// Get current model parameters for checkpointing.
+    private func getModelParameters() throws -> ModuleParameters {
+        guard let model = model else { throw TrainingError.notPrepared }
+        return model.parameters
     }
 }

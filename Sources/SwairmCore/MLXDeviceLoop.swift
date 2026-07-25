@@ -29,8 +29,8 @@ public struct MLXLoopConfig: Sendable {
     public init(
         modelPath: String = "models/Qwen2-0.5B-Instruct-4bit",
         targetModules: [String] = ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-        rankMap: [String: Int] = ["attn": 4, "mlp": 6],
-        alphaMap: [String: Float] = ["attn": 16.0, "mlp": 16.0],
+        rankMap: [String: Int] = ["": 6],           // uniform rank 6 for all target modules (max of D6's attn=4, mlp=6); per-module ranks enforced Anchor-side via SVD truncation
+        alphaMap: [String: Float] = ["": 16.0],     // uniform alpha 16 -> scale = 16/6
         learningRate: Float = 1e-4,
         weightDecay: Float = 0.01,
         maxGradNorm: Float = 1.0,
@@ -89,6 +89,9 @@ public actor MLXDeviceLoop {
     private let trainer: MLXTrainer
     private var roundsRun = 0
 
+    // Checkpoint file URL for this device
+    private let checkpointURL: URL
+
     public init(anchor: AnchorConnecting, deviceID: String, deviceIndex: Int,
                 config: MLXLoopConfig = MLXLoopConfig()) throws {
         self.anchor = anchor
@@ -112,6 +115,30 @@ public actor MLXDeviceLoop {
             seed: config.seed + UInt64(deviceIndex)
         )
         self.trainer = MLXTrainer(config: trainerConfig)
+
+        // Checkpoint file in Documents directory
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        self.checkpointURL = docs.appendingPathComponent("checkpoint_\(deviceID).npz")
+    }
+
+    // MARK: - Checkpointing
+
+    /// Save trainer checkpoint to disk.
+    private func saveCheckpoint() async throws {
+        try await trainer.saveCheckpoint(to: checkpointURL)
+    }
+
+    /// Load trainer checkpoint from disk if it exists.
+    private func loadCheckpoint() async throws {
+        guard FileManager.default.fileExists(atPath: checkpointURL.path) else {
+            return // First run, no checkpoint
+        }
+        try await trainer.loadCheckpoint(from: checkpointURL)
+    }
+
+    /// Delete checkpoint (e.g., after successful round completion if desired).
+    private func deleteCheckpoint() {
+        try? FileManager.default.removeItem(at: checkpointURL)
     }
 
     /// One full round: status -> fetch -> prepare -> train -> export -> upload.
@@ -121,11 +148,15 @@ public actor MLXDeviceLoop {
         let round = roundsRun
         roundsRun += 1
 
+        // Load checkpoint if resuming from interruption
+        try await loadCheckpoint()
+
         let status = try await anchor.status()
         let globalAdapter = try await anchor.latestAdapter()
         let fetchedVersion = globalAdapter?.version ?? 0
 
         // Prepare trainer with global adapter (or fresh if nil)
+        // If we loaded a checkpoint, prepare() will re-apply the global adapter on top
         try await trainer.prepare(globalAdapter: globalAdapter)
 
         // Get curriculum batch stream
@@ -154,6 +185,9 @@ public actor MLXDeviceLoop {
             modules: modules
         )
         let receipt = try await anchor.upload(payload)
+
+        // Save checkpoint after successful round
+        try await saveCheckpoint()
 
         return MLXRoundResult(
             round: round,

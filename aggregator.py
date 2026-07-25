@@ -83,8 +83,8 @@ NORM_CLIP_MULT = 3.0         # reject deltas with norm > mult * median norm
 DEFAULT_RANK_MAP = {"kv": 2, "attn": 4, "mlp": 6}
 RANK_STARVATION_THRESHOLD = 0.15   # trailing/top ratio (linear-sum convention;
                                     # re-tune if convention changes)
-TRIM_BEFORE_WEIGHTS = True   # LOCKED (D8): 20/20 seeds, t=13.4; do not flip
-                             # without new evidence (validate_open_configs.py)
+TRIM_BEFORE_WEIGHTS: Final[bool] = True   # LOCKED (D8): 20/20 seeds, t=13.4; do not flip
+                                         # without new evidence (validate_open_configs.py)
 
 
 def _default_target_rank(name):

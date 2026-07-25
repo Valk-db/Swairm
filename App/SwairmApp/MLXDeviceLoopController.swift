@@ -53,8 +53,8 @@ final class MLXDeviceLoopController {
                 config: MLXLoopConfig(
                     modelPath: modelPath,
                     targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-                    rankMap: ["attn": 4, "mlp": 6],
-                    alphaMap: ["attn": 16.0, "mlp": 16.0],
+                    rankMap: ["": 6],           // uniform rank 6 for all target modules
+                    alphaMap: ["": 16.0],       // uniform alpha 16 -> scale = 16/6
                     learningRate: learningRate,
                     weightDecay: 0.01,
                     maxGradNorm: 1.0,

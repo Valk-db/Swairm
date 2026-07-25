@@ -38,6 +38,13 @@ targets:
         NSLocalNetworkUsageDescription: >-
           Swairm connects to your FCS Anchor server on the local network
           to fetch and upload federated training adapters.
+        # Background task support for federated learning rounds
+        UIBackgroundModes:
+          - background-processing
+          - background-fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.swairm.app.refresh
+          - com.swairm.app.processing
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.valk.swairm

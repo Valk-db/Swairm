@@ -1,12 +1,11 @@
-// Single-screen UI: Anchor connection settings, run control, and a live
-// round log. Supports both Proxy (linear proxy) and MLX (real DoRA) modes.
-
 import SwiftUI
+import SwairmCore
 
 struct ContentView: View {
     @State private var useMLXTrainer = false
     @State private var proxyController = DeviceLoopController()
     @State private var mlxController = MLXDeviceLoopController()
+    @State private var bgScheduler = BackgroundTaskScheduler.shared
 
     // Shared state properties that both controllers expose
     @State private var anchorURLText = "http://192.168.1.100:8000"
@@ -77,6 +76,54 @@ struct ContentView: View {
                     }
                 }
 
+                Section("Background Training") {
+                    Toggle("Enable Background Rounds", isOn: $bgScheduler.isBackgroundEnabled)
+                        .disabled(bgScheduler.isBackgroundTaskRunning)
+
+                    if bgScheduler.lastResult != nil {
+                        let result = bgScheduler.lastResult!
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Last Round: \(result.round)")
+                                Spacer()
+                                Text(result.isMLXMode ? "MLX" : "Proxy")
+                                    .font(.caption)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(result.isMLXMode ? Color.blue.opacity(0.2) : Color.green.opacity(0.2))
+                                    .cornerRadius(4)
+                            }
+                            if let loss = result.finalLoss {
+                                Text("Loss: \(String(format: "%.4f", loss))")
+                                    .font(.caption.monospaced())
+                            }
+                            Text("Anchor v\(result.anchorVersion) • \(result.stepsCompleted) steps • \(result.termination)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(result.timestamp, style: .relative)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            if let error = result.error {
+                                Text("Error: \(error)")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                    } else {
+                        Text("No background rounds completed yet")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button(bgScheduler.isBackgroundTaskRunning ? "Background task running…" : "Run Background Round Now") {
+                        Task {
+                            await bgScheduler.runBackgroundRoundNow()
+                        }
+                    }
+                    .disabled(bgScheduler.isBackgroundTaskRunning || bgScheduler.anchorURLText.isEmpty)
+                    .font(.caption)
+                }
+
                 Section("Status") {
                     LabeledContent("Device", value: deviceID)
                     LabeledContent("Anchor version",
@@ -116,6 +163,19 @@ struct ContentView: View {
     }
 
     private func start() {
+        // Sync URL to background scheduler
+        bgScheduler.anchorURLText = anchorURLText
+        bgScheduler.config.deviceIndex = deviceIndex
+        bgScheduler.config.isMLXMode = useMLXTrainer
+        if useMLXTrainer {
+            bgScheduler.config.modelPath = mlxController.modelPath
+            bgScheduler.config.curriculumDirectory = mlxController.curriculumDirectory
+            bgScheduler.config.maxStepsPerRound = mlxController.maxStepsPerRound
+            bgScheduler.config.batchSize = mlxController.batchSize
+            bgScheduler.config.sequenceLength = mlxController.sequenceLength
+            bgScheduler.config.learningRate = mlxController.learningRate
+        }
+
         if useMLXTrainer {
             mlxController.start()
         } else {

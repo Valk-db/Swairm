@@ -1,9 +1,12 @@
 """
-main.py -- FCS Anchor service (v1.2 with WebSockets)
+main.py -- FCS Anchor service (v1.3 with curriculum download)
 ====================================================
 FastAPI shell + directory-as-queue + single background aggregation worker,
 wired to aggregator.py (the validated math core).
 
+v1.3: Added curriculum download endpoints (GET /curriculum/<epoch>/manifest.json,
+GET /curriculum/<epoch>/shard_<N>.npz). Clients can now fetch curriculum shards
+for real on-device MLX training.
 v1.2: detect_skew() implemented (was a stub). Completes decision D2's
 conditional staleness policy.
   Detection principle: demographic skew is NOT detectable from hourly
@@ -34,8 +37,13 @@ Payload format (one .npz per upload):
   "__meta__": JSON string {device_id, fetch_version, curriculum_epoch}
   "<module>::A", "<module>::B", "<module>::m" per module
 
+Curriculum shard format (.npz):
+  token_ids: [num_sequences, seq_len]  uint32
+  labels:    [num_sequences, seq_len]  uint32
+
 Run server:    pip install fastapi uvicorn
                uvicorn main:app --host 0.0.0.0 --port 8000
+               # With TLS: uvicorn main:app --host 0.0.0.0 --port 8000 --ssl-certfile=cert.pem --ssl-keyfile=key.pem
 Self-test:     python main.py --selftest     (no HTTP, no fastapi needed)
 """
 
@@ -47,11 +55,22 @@ import threading
 import time
 import uuid
 import asyncio
+import hmac
+import hashlib
 from pathlib import Path
 
 import numpy as np
 
 from aggregator import aggregate_round
+
+# Prometheus metrics (optional dependency)
+try:
+    from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    Counter = Gauge = Histogram = None
+    generate_latest = CONTENT_TYPE_LATEST = None
 
 # =================================================================-- WebSockets
 class ConnectionManager:
@@ -85,6 +104,9 @@ QUEUE_QUARANTINE = BASE_DIR / "queue" / "quarantine"
 MODELS_DIR = BASE_DIR / "models"
 STATE_PATH = BASE_DIR / "state.json"
 AGG_INTERVAL_S = int(os.environ.get("FCS_AGG_INTERVAL_S", str(30 * 60)))        # worker drain interval (matches sim cadence)
+# Upload size limit (DoS protection) - 50MB default
+MAX_UPLOAD_MB = int(os.environ.get("FCS_MAX_UPLOAD_MB", "50"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 # Soft weight for uploads exactly one curriculum epoch behind (decision D9,
 # validate_open_configs.py: soft 0.25 beats hard rejection in every tested
 # transition regime, t=+21..+100). Older epochs remain hard-rejected.
@@ -98,12 +120,121 @@ SKEW_MIN_FRACTION = 0.20        # both windows need >=20% of upload volume
 SKEW_JACCARD_THRESHOLD = 0.30   # device-set overlap below this = skew
 
 
+# =============================================================-- Prometheus metrics
+if PROMETHEUS_AVAILABLE:
+    # Counters
+    UPLOADS_RECEIVED = Counter(
+        "fcs_uploads_received_total",
+        "Total number of adapter uploads received",
+        ["result"]  # "queued", "rejected_hmac", "rejected_size", "error"
+    )
+    ADAPTER_FETCHES = Counter(
+        "fcs_adapter_fetches_total",
+        "Total number of adapter fetches from /adapter/latest",
+        ["result"]  # "ok", "not_found", "rejected_hmac", "error"
+    )
+    CURRICULUM_MANIFEST_REQUESTS = Counter(
+        "fcs_curriculum_manifest_requests_total",
+        "Total number of curriculum manifest requests",
+        ["result", "epoch"]
+    )
+    CURRICULUM_SHARD_REQUESTS = Counter(
+        "fcs_curriculum_shard_requests_total",
+        "Total number of curriculum shard requests",
+        ["result", "epoch"]
+    )
+    AGGREGATION_ROUNDS = Counter(
+        "fcs_aggregation_rounds_total",
+        "Total number of aggregation rounds completed",
+        ["result"]  # "ok", "no_uploads", "error"
+    )
+    UPLOADS_QUARANTINED = Counter(
+        "fcs_uploads_quarantined_total",
+        "Total number of uploads quarantined during aggregation"
+    )
+
+    # Gauges
+    CURRENT_VERSION = Gauge(
+        "fcs_current_version",
+        "Current global adapter version number"
+    )
+    CURRENT_EPOCH = Gauge(
+        "fcs_current_epoch",
+        "Current curriculum epoch number"
+    )
+    PENDING_UPLOADS = Gauge(
+        "fcs_pending_uploads",
+        "Number of uploads in queue/pending"
+    )
+    ACTIVE_DEVICES = Gauge(
+        "fcs_active_devices",
+        "Number of distinct devices that uploaded in the last round"
+    )
+    SKEW_DETECTED = Gauge(
+        "fcs_skew_detected",
+        "Whether demographic skew was detected in the last round (1=yes, 0=no)"
+    )
+    AGGREGATION_WALL_CLOCK = Gauge(
+        "fcs_aggregation_wall_clock_seconds",
+        "Wall-clock time of the last aggregation round in seconds"
+    )
+    AGGREGATED_UPLOADS = Gauge(
+        "fcs_aggregated_uploads_last_round",
+        "Number of uploads aggregated in the last round"
+    )
+
+    # Histograms
+    UPLOAD_SIZE_BYTES = Histogram(
+        "fcs_upload_size_bytes",
+        "Size of upload payloads in bytes",
+        buckets=[1024, 10240, 102400, 1048576, 10485760, 52428800]
+    )
+    AGGREGATION_DURATION_SECONDS = Histogram(
+        "fcs_aggregation_duration_seconds",
+        "Time spent in aggregation round (drain_once)",
+        buckets=[1, 5, 10, 30, 60, 120, 300]
+    )
+else:
+    UPLOADS_RECEIVED = ADAPTER_FETCHES = CURRICULUM_MANIFEST_REQUESTS = None
+    CURRICULUM_SHARD_REQUESTS = AGGREGATION_ROUNDS = UPLOADS_QUARANTINED = None
+    CURRENT_VERSION = CURRENT_EPOCH = PENDING_UPLOADS = ACTIVE_DEVICES = None
+    SKEW_DETECTED = AGGREGATION_WALL_CLOCK = AGGREGATED_UPLOADS = None
+    UPLOAD_SIZE_BYTES = AGGREGATION_DURATION_SECONDS = None
+
+
 def _is_night(hour):
     return hour >= 22 or hour < 7
 
 
 def _is_day(hour):
     return 9 <= hour < 17
+
+
+# ================================================================-- TLS / HMAC auth
+# HMAC secret for request authentication (disabled when empty for dev)
+HMAC_SECRET = os.environ.get("FCS_HMAC_SECRET", "").encode()
+# Endpoints that require HMAC auth (exact paths and prefixes)
+HMAC_PROTECTED_PATHS = {
+    "/upload",
+    "/adapter/latest",
+    "/curriculum/",   # prefix match for all curriculum endpoints
+}
+
+def verify_hmac(request: Request, body: bytes) -> bool:
+    """Verify HMAC-SHA256 signature on request. Returns True if valid or auth disabled."""
+    if not HMAC_SECRET:
+        return True  # auth disabled (dev mode)
+    sig_header = request.headers.get("X-HMAC-Signature")
+    if not sig_header:
+        return False
+    # Signature format: "sha256=<hex>"
+    if not sig_header.startswith("sha256="):
+        return False
+    provided = sig_header[7:]  # strip "sha256="
+    # Canonical string: METHOD\nPATH\nBODY
+    canonical = f"{request.method}\n{request.url.path}\n".encode() + body
+    expected = hmac.new(HMAC_SECRET, canonical, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(provided, expected)
 
 
 for d in (QUEUE_TEMP, QUEUE_PENDING, QUEUE_PROCESSED, QUEUE_QUARANTINE,
@@ -230,10 +361,16 @@ def detect_skew(state) -> bool:
 # ------------------------------------------------------------------ worker
 def drain_once(state, verbose=True):
     """One worker pass: validate pending uploads, aggregate, snapshot."""
+    import time as time_module
+    start_time = time_module.time()
+
     files = sorted(QUEUE_PENDING.glob("*.npz"))
     if not files:
+        if PROMETHEUS_AVAILABLE:
+            AGGREGATION_ROUNDS.labels(result="no_uploads").inc()
         return None
     uploads, sources = [], []
+    quarantined_count = 0
     for f in files:
         try:
             uploads.append(unpack_upload(f))
@@ -242,7 +379,12 @@ def drain_once(state, verbose=True):
             if verbose:
                 print(f"[worker] quarantined {f.name}: {exc}")
             os.replace(f, QUEUE_QUARANTINE / f.name)
+            quarantined_count += 1
     if not uploads:
+        if PROMETHEUS_AVAILABLE:
+            AGGREGATION_ROUNDS.labels(result="no_uploads").inc()
+            if quarantined_count > 0:
+                UPLOADS_QUARANTINED.inc(quarantined_count)
         return None
 
     skew = detect_skew(state)
@@ -264,7 +406,7 @@ def drain_once(state, verbose=True):
              "n_uploads": len(uploads)})
         state["participation_log"] = state["participation_log"][-2000:]
         save_state(state)
-        
+
         # Broadcast the new version instantly via WebSocket
         if main_loop and main_loop.is_running():
             asyncio.run_coroutine_threadsafe(
@@ -275,6 +417,25 @@ def drain_once(state, verbose=True):
             print(f"[worker] round {state['rounds']}: aggregated "
                   f"{len(uploads)} uploads -> version {state['version']} "
                   f"({snap.name}, skew_detected={skew})")
+
+        # Update Prometheus metrics
+        if PROMETHEUS_AVAILABLE:
+            CURRENT_VERSION.set(state["version"])
+            CURRENT_EPOCH.set(state["curriculum_epoch"])
+            ACTIVE_DEVICES.set(len({u["device_id"] for u in uploads}))
+            SKEW_DETECTED.set(1 if skew else 0)
+            AGGREGATION_WALL_CLOCK.set(time_module.time())
+            AGGREGATED_UPLOADS.set(len(uploads))
+            AGGREGATION_ROUNDS.labels(result="ok").inc()
+            AGGREGATION_DURATION_SECONDS.observe(time_module.time() - start_time)
+            if quarantined_count > 0:
+                UPLOADS_QUARANTINED.inc(quarantined_count)
+    else:
+        if PROMETHEUS_AVAILABLE:
+            AGGREGATION_ROUNDS.labels(result="error").inc()
+            AGGREGATION_DURATION_SECONDS.observe(time_module.time() - start_time)
+            if quarantined_count > 0:
+                UPLOADS_QUARANTINED.inc(quarantined_count)
     for f in sources:
         os.replace(f, QUEUE_PROCESSED / f.name)
     return result
@@ -287,6 +448,8 @@ def worker_loop():
             drain_once(state)
         except Exception as exc:
             print(f"[worker] round failed, queue preserved: {exc}")
+            if PROMETHEUS_AVAILABLE:
+                AGGREGATION_ROUNDS.labels(result="error").inc()
         time.sleep(AGG_INTERVAL_S)
 
 
@@ -322,27 +485,144 @@ try:
                 "skew_detected": detect_skew(state),
                 "pending": len(list(QUEUE_PENDING.glob("*.npz")))}
 
+    @app.get("/metrics")
+    def metrics():
+        """Prometheus metrics endpoint."""
+        if not PROMETHEUS_AVAILABLE:
+            return Response(status_code=503, content="prometheus_client not installed")
+        # Update gauges with current state
+        state = load_state()
+        if CURRENT_VERSION:
+            CURRENT_VERSION.set(state["version"])
+        if CURRENT_EPOCH:
+            CURRENT_EPOCH.set(state["curriculum_epoch"])
+        if PENDING_UPLOADS:
+            PENDING_UPLOADS.set(len(list(QUEUE_PENDING.glob("*.npz"))))
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     @app.post("/upload")
     async def upload(request: Request):
         raw = await request.body()
+        if len(raw) > MAX_UPLOAD_BYTES:
+            if PROMETHEUS_AVAILABLE:
+                UPLOADS_RECEIVED.labels(result="rejected_size").inc()
+                UPLOAD_SIZE_BYTES.observe(len(raw))
+            return Response(status_code=413,
+                            content=f"Payload {len(raw)} bytes exceeds {MAX_UPLOAD_MB}MB limit")
+        # HMAC verification
+        if not verify_hmac(request, raw):
+            if PROMETHEUS_AVAILABLE:
+                UPLOADS_RECEIVED.labels(result="rejected_hmac").inc()
+                UPLOAD_SIZE_BYTES.observe(len(raw))
+            return Response(status_code=401, content="Invalid HMAC signature")
         name = enqueue(raw)                # no parsing here, by design
+        if PROMETHEUS_AVAILABLE:
+            UPLOADS_RECEIVED.labels(result="queued").inc()
+            UPLOAD_SIZE_BYTES.observe(len(raw))
         return {"queued": name}
 
     @app.get("/adapter/latest")
-    def adapter_latest():
+    def adapter_latest(request: Request):
+        if not verify_hmac(request, b""):
+            if PROMETHEUS_AVAILABLE:
+                ADAPTER_FETCHES.labels(result="rejected_hmac").inc()
+            return Response(status_code=401, content="Invalid HMAC signature")
         state = load_state()
         if state["version"] == 0:
+            if PROMETHEUS_AVAILABLE:
+                ADAPTER_FETCHES.labels(result="not_found").inc()
             return Response(status_code=404,
                             content="no global adapter yet")
         path = MODELS_DIR / f"v_{state['version']:05d}.npz"
         if not path.exists():
+            if PROMETHEUS_AVAILABLE:
+                ADAPTER_FETCHES.labels(result="error").inc()
             return Response(status_code=404,
                             content="adapter file missing on disk")
+        if PROMETHEUS_AVAILABLE:
+            ADAPTER_FETCHES.labels(result="ok").inc()
         return Response(content=path.read_bytes(),
                         media_type="application/octet-stream",
                         headers={"X-Adapter-Version": str(state["version"]),
                                  "X-Curriculum-Epoch":
                                      str(state["curriculum_epoch"])})
+
+
+    @app.get("/curriculum/{epoch}/manifest")
+    def curriculum_manifest(epoch: int, request: Request):
+        """Return manifest of shard files for a curriculum epoch."""
+        if not verify_hmac(request, b""):
+            if PROMETHEUS_AVAILABLE:
+                CURRICULUM_MANIFEST_REQUESTS.labels(result="rejected_hmac", epoch=str(epoch)).inc()
+            return Response(status_code=401, content="Invalid HMAC signature")
+        curriculum_dir = BASE_DIR / "curriculum" / f"epoch_{epoch}"
+        if not curriculum_dir.exists():
+            if PROMETHEUS_AVAILABLE:
+                CURRICULUM_MANIFEST_REQUESTS.labels(result="not_found", epoch=str(epoch)).inc()
+            return Response(status_code=404,
+                            content=f"curriculum epoch {epoch} not found")
+        shards = sorted([f.name for f in curriculum_dir.glob("shard_*.npz")])
+        if not shards:
+            if PROMETHEUS_AVAILABLE:
+                CURRICULUM_MANIFEST_REQUESTS.labels(result="not_found", epoch=str(epoch)).inc()
+            return Response(status_code=404,
+                            content=f"no shards in epoch {epoch}")
+        # Compute SHA256 of each shard for integrity verification
+        import hashlib
+        shard_info = []
+        for shard_name in shards:
+            shard_path = curriculum_dir / shard_name
+            sha256 = hashlib.sha256(shard_path.read_bytes()).hexdigest()
+            # Get shape info from NPZ
+            try:
+                with np.load(shard_path, allow_pickle=False) as z:
+                    token_shape = list(z["token_ids"].shape)
+                    label_shape = list(z["labels"].shape)
+            except Exception:
+                token_shape = [0, 0]
+                label_shape = [0, 0]
+            shard_info.append({
+                "name": shard_name,
+                "sha256": sha256,
+                "token_shape": token_shape,
+                "label_shape": label_shape
+            })
+        manifest = {
+            "epoch": epoch,
+            "total_shards": len(shards),
+            "total_sequences": sum(s["token_shape"][0] for s in shard_info),
+            "sequence_length": shard_info[0]["token_shape"][1] if shard_info else 0,
+            "shards": shard_info
+        }
+        if PROMETHEUS_AVAILABLE:
+            CURRICULUM_MANIFEST_REQUESTS.labels(result="ok", epoch=str(epoch)).inc()
+        return manifest
+
+
+    @app.get("/curriculum/{epoch}/{shard_name}")
+    def curriculum_shard(epoch: int, shard_name: str, request: Request):
+        """Stream a single curriculum shard."""
+        if not verify_hmac(request, b""):
+            if PROMETHEUS_AVAILABLE:
+                CURRICULUM_SHARD_REQUESTS.labels(result="rejected_hmac", epoch=str(epoch)).inc()
+            return Response(status_code=401, content="Invalid HMAC signature")
+        # Validate shard name to prevent path traversal
+        if ".." in shard_name or "/" in shard_name or "\\" in shard_name:
+            if PROMETHEUS_AVAILABLE:
+                CURRICULUM_SHARD_REQUESTS.labels(result="invalid_name", epoch=str(epoch)).inc()
+            return Response(status_code=400, content="invalid shard name")
+        shard_path = BASE_DIR / "curriculum" / f"epoch_{epoch}" / shard_name
+        if not shard_path.exists():
+            if PROMETHEUS_AVAILABLE:
+                CURRICULUM_SHARD_REQUESTS.labels(result="not_found", epoch=str(epoch)).inc()
+            return Response(status_code=404, content="shard not found")
+        if PROMETHEUS_AVAILABLE:
+            CURRICULUM_SHARD_REQUESTS.labels(result="ok", epoch=str(epoch)).inc()
+        return Response(
+            content=shard_path.read_bytes(),
+            media_type="application/octet-stream",
+            headers={"X-Shard-Name": shard_name}
+        )
 except ImportError:
     app = None      # fastapi not installed; --selftest still works
 

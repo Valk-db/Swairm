@@ -196,3 +196,32 @@ public enum NPY {
         return String(rest[afterQ1..<q2])
     }
 }
+
+// MARK: - MLXArray interop
+
+extension NPYArray {
+    /// Create an NPYArray from an MLXArray (float32).
+    public static func fromMLXArray(_ array: MLXArray) throws -> NPYArray {
+        let flat = array.flattened().asType(.float32)
+        let floats = flat.asArray(Float.self)
+        let shape = array.shape
+
+        // Convert floats to bytes (little-endian float32)
+        var data = Data(capacity: floats.count * 4)
+        for f in floats {
+            var bits = f.bitPattern
+            data.append(UInt8(bits & 0xFF))
+            data.append(UInt8((bits >> 8) & 0xFF))
+            data.append(UInt8((bits >> 16) & 0xFF))
+            data.append(UInt8((bits >> 24) & 0xFF))
+        }
+
+        return NPYArray(descr: "<f4", shape: shape, raw: data)
+    }
+
+    /// Convert NPYArray back to MLXArray.
+    public func toMLXArray() -> MLXArray {
+        let floats = try! self.floats()
+        return MLXArray(floats, self.shape).asType(.float32)
+    }
+}

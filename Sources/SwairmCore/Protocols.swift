@@ -174,3 +174,60 @@ public protocol LocalTraining: Actor {
     /// Full post-training adapter state (D7: replace semantics, not deltas).
     func exportAdapter() async throws -> [String: AdapterModule]
 }
+
+// ==========================================================================
+// MARK: - Curriculum download
+// ==========================================================================
+
+/// Manifest for a curriculum epoch, returned by GET /curriculum/{epoch}/manifest
+public struct CurriculumManifest: Codable, Sendable {
+    public let epoch: Int
+    public let totalShards: Int
+    public let totalSequences: Int
+    public let sequenceLength: Int
+    public let shards: [ShardInfo]
+
+    public init(epoch: Int, totalShards: Int, totalSequences: Int,
+                sequenceLength: Int, shards: [ShardInfo]) {
+        self.epoch = epoch
+        self.totalShards = totalShards
+        self.totalSequences = totalSequences
+        self.sequenceLength = sequenceLength
+        self.shards = shards
+    }
+}
+
+/// Individual shard metadata
+public struct ShardInfo: Codable, Sendable {
+    public let name: String
+    public let sha256: String
+    public let tokenShape: [Int]
+    public let labelShape: [Int]
+
+    public init(name: String, sha256: String, tokenShape: [Int], labelShape: [Int]) {
+        self.name = name
+        self.sha256 = sha256
+        self.tokenShape = tokenShape
+        self.labelShape = labelShape
+    }
+}
+
+/// Protocol for downloading curriculum shards from the Anchor.
+/// Conformers must be Sendable and fully async (no blocking).
+public protocol CurriculumDownloading: Sendable {
+    /// Fetch manifest for a curriculum epoch.
+    /// Throws AnchorClientError.unsupported if Anchor doesn't implement this yet.
+    func fetchManifest(epoch: Int) async throws -> CurriculumManifest
+
+    /// Stream a single shard to disk. Validates SHA256 after download.
+    /// Returns the local file URL on success.
+    func downloadShard(epoch: Int, shardName: String, to destination: URL) async throws -> URL
+}
+
+public enum CurriculumError: Error, Sendable {
+    case manifestNotFound(Int)
+    case shardNotFound(Int, String)
+    case integrityCheckFailed(expected: String, actual: String)
+    case invalidShardName(String)
+    case notImplemented
+}

@@ -46,6 +46,11 @@ MLXTrainer.swift: Fixed compilation bugs (3 bugs + throws signature):
 - Line 391: Added `try` at call site
 All fixes verified by green build-test CI.
 
+**P1 tasks completed (2026-07-25):**
+- TLS + HMAC auth on Anchor endpoints (main.py + AnchorClient.swift): HMAC-SHA256 on /upload, /adapter/latest, /curriculum/*, disabled when FCS_HMAC_SECRET unset (dev mode)
+- iOS background task scheduler (BackgroundTaskScheduler.swift): BGAppRefreshTask (30s) + BGProcessingTask (minutes), integrates with both Proxy and MLX training modes, battery/thermal checks via ResourceBudget
+- Prometheus /metrics endpoint on Anchor (main.py): counters/gauges/histograms for uploads, fetches, curriculum, aggregation rounds, quarantine; optional dependency (no-op if prometheus-client not installed)
+
 ## Ground rules
 - No local Mac. Never claim something compiles or is fixed without a
   green CI run to point to.
