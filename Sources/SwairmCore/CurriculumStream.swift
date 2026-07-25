@@ -98,10 +98,13 @@ public struct CurriculumBatchIterator: AsyncIteratorProtocol, Sendable {
             let needed = batchSize * sequenceLength
 
             if remaining < needed {
-                // Not enough for a full batch; load next shard and continue
+                // Not enough left in this shard for a full batch; discard the
+                // remainder and force the next iteration to load a fresh shard
                 if shardIndex >= shardFiles.count {
                     return nil
                 }
+                currentShardTokens = []
+                currentShardLabels = []
                 continue
             }
 
