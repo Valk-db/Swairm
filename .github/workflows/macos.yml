@@ -181,15 +181,15 @@ jobs:
           xcrun -sdk macosx metallib "$AIRS"/*.air -o "$BINDIR/mlx.metallib"
           ls -la "$BINDIR/mlx.metallib"
 
-      - name: Run real MLX fleet (2 devices, 2 rounds)
+      - name: Run real MLX fleet (4 devices, 5 rounds, 10 steps)
         run: |
           swift run swairm-mlx-client \
             --anchor http://127.0.0.1:8000 \
             --model models/mlx-model \
             --curriculum curriculum \
-            --fleet 2 \
-            --rounds 2 \
-            --max-steps 4 \
+            --fleet 4 \
+            --rounds 5 \
+            --max-steps 10 \
             --batch-size 1 \
             --seq-len 64
 
@@ -197,7 +197,7 @@ jobs:
         run: |
           curl -sf http://127.0.0.1:8000/status -o status.json
           cat status.json
-          python -c "import json; s = json.load(open('status.json')); assert s['version'] >= 1, s; print('OK: version advanced to', s['version'])"
+          python -c "import json; s = json.load(open('status.json')); assert s['version'] >= 4, s; print('OK: version advanced to', s['version'])"
 
       - name: Show Anchor log
         if: always()
