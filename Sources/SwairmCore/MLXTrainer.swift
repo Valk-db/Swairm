@@ -397,7 +397,7 @@ public actor MLXTrainer: LocalTraining {
             // Apply gradients via optimizer
             if let optimizer = optimizer, let validGrads = grads {
                 optimizer.update(model: model!, gradients: validGrads)
-                eval(model!, optimizer, loss)
+                eval(model!, loss)
             }
 
             // Update learning rate for next step
@@ -516,7 +516,7 @@ public actor MLXTrainer: LocalTraining {
         let (loss, grads) = gradFn(model, inputIds, labels)
 
         // Optimizer step happens once, in train()'s loop — don't apply it here too.
-        eval(loss)
+        // eval(model, loss) is also called in train() after optimizer.update
 
         return (loss.item(Float.self), grads)
     }
@@ -526,6 +526,12 @@ public actor MLXTrainer: LocalTraining {
         // [token_0, label_0, token_1, label_1, ...] for batch_size * seq_len tokens
         let uints = data.withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) }
         let totalPairs = uints.count / 2
+        let expectedPairs = config.batchSize * config.sequenceLength
+        guard totalPairs == expectedPairs else {
+            throw TrainingError.curriculumError(
+                "Batch decode: expected \(expectedPairs) token/label pairs, got \(totalPairs) (data bytes: \(data.count))"
+            )
+        }
         var tokens = [UInt32]()
         var labels = [UInt32]()
         tokens.reserveCapacity(totalPairs)
