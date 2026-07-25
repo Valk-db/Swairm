@@ -250,6 +250,34 @@ public actor MLXTrainer: LocalTraining {
         // the model doesn't report a LoRAModel layer list.
         let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
 
+        // LoRAContainer.from matches `keys` by EXACT equality against
+        // Module.namedModules() paths, not by suffix/substring -- despite
+        // config.targetModules being bare names ("q_proj"). Real submodules
+        // are nested ("self_attn.q_proj", "mlp.gate_proj"), so the bare
+        // names never matched: replaceLayers() adapted zero layers,
+        // model.freeze() (called inside LoRAContainer.from) left the whole
+        // model frozen, and the `grad` transform in forwardBackward() then
+        // saw zero trainable parameters -- "[grad] Must specify at least
+        // one argument." Resolve the bare names to their qualified keys
+        // here by suffix so the intended target set (D6: q/v attn + all
+        // mlp) is what actually gets adapted, and fail fast with a clear
+        // error if a future base model's module names don't match any of
+        // targetModules, instead of the opaque MLX-side trap.
+        let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
+        var resolvedKeys: [String]? = nil
+        if !config.targetModules.isEmpty {
+            let matched = availableKeys.filter { key in
+                config.targetModules.contains { key == $0 || key.hasSuffix("." + $0) }
+            }
+            guard !matched.isEmpty else {
+                throw TrainingError.ambiguousAdapterConfig(
+                    "targetModules \(config.targetModules) matched none of "
+                    + "the model's module keys \(availableKeys) -- adapter "
+                    + "would train zero parameters.")
+            }
+            resolvedKeys = matched
+        }
+
         // Create LoRAConfiguration for DoRA
         let loraConfig = LoRAConfiguration(
             numLayers: numLayers,
@@ -257,7 +285,7 @@ public actor MLXTrainer: LocalTraining {
             loraParameters: LoRAConfiguration.LoRAParameters(
                 rank: rank,
                 scale: scale,
-                keys: config.targetModules.isEmpty ? nil : config.targetModules
+                keys: resolvedKeys
             )
         )
 
