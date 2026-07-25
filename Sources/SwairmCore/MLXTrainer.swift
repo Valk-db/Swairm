@@ -388,7 +388,7 @@ public actor MLXTrainer: LocalTraining {
             }
 
             // Decode batch data
-            let (inputIds, labels) = decodeBatch(batch.data)
+            let (inputIds, labels) = try decodeBatch(batch.data)
 
             // Forward + backward pass
             let (loss, grads) = try await forwardBackward(inputIds: inputIds, labels: labels)
@@ -521,7 +521,7 @@ public actor MLXTrainer: LocalTraining {
         return (loss.item(Float.self), grads)
     }
 
-    private func decodeBatch(_ data: Data) -> (MLXArray, MLXArray) {
+    private func decodeBatch(_ data: Data) throws -> (MLXArray, MLXArray) {
         // Batch format: interleaved UInt32 token/label pairs
         // [token_0, label_0, token_1, label_1, ...] for batch_size * seq_len tokens
         let uints = data.withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) }
