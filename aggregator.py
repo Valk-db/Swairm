@@ -71,6 +71,7 @@ FORMERLY-OPEN ITEMS, now decided by evidence (validate_open_configs.py,
 Run self-test: python aggregator.py
 """
 
+from typing import Final
 import numpy as np
 from sklearn.utils.extmath import randomized_svd
 
