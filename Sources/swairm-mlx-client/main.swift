@@ -63,12 +63,15 @@ func makeConfig(deviceIndex: Int) -> MLXLoopConfig {
     MLXLoopConfig(
         modelPath: modelPath,
         // Bare projection names: matched by suffix/substring against the
-        // model's qualified module keys inside LoRAContainer. rankMap/alphaMap
-        // resolve uniformly (see resolvedRankScale) -- the container applies
-        // one rank/scale; D6's per-module split stays Anchor-side.
+        // model's qualified module keys inside LoRAContainer. MLX's
+        // LoRAContainer applies ONE rank/scale to ALL matched keys (see
+        // LoRAContainer.createReplacementLayer), so D6's per-module ranks
+        // (attn=4, mlp=6) are enforced Anchor-side at aggregation via SVD
+        // truncation (aggregator.py: aggregate_module). On-device we use
+        // the max rank (6 for Qwen3's q/v/gate/up/down_proj) uniformly.
         targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-        rankMap: ["attn": 4, "mlp": 6],
-        alphaMap: ["attn": 16.0, "mlp": 16.0],
+        rankMap: ["": 6],           // uniform rank 6 for all target modules
+        alphaMap: ["": 16.0],       // uniform alpha 16 -> scale = 16/6
         learningRate: 1e-4,
         maxStepsPerRound: maxSteps,
         batchSize: batchSize,
