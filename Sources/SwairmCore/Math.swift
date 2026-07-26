@@ -177,8 +177,8 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
                 &y.data, Int32(l))
 
     // 3. Power iterations: (D D^T)^q D Ω
-    var yT = Matrix(rows: l, cols: m)
-    var dT = D.transposed()
+    var _yT = Matrix(rows: l, cols: m)
+    let dT = D.transposed()
     var z = Matrix(rows: n, cols: l)
     for _ in 0..<powerIterations {
         // Z = D^T * Y  (n × l)
@@ -207,7 +207,7 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
     }
 
     // 4. B = Y^T * D  (l × n)
-    var yTData = y.transposed()
+    let yTData = y.transposed()
     var bSmall = Matrix(rows: l, cols: n)
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                 Int32(l), Int32(n), Int32(m),
@@ -327,7 +327,7 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     var vtPrimeColMajor = Matrix(rows: n, cols: k)  // receives V_col^T (k×n col-major)
 
     // sgesdd: jobz = 'S' (economy size)
-    let jobz: Int8 = 83  // 'S'
+    var jobz: Int8 = 83  // 'S'
     let ldu = Int32(m)   // leading dim of U_col output = m (col-major rows)
     let ldvt = Int32(k)  // leading dim of V_col^T output = k
     var lwork: Int32 = -1
