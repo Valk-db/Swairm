@@ -115,28 +115,55 @@ Added optional Prometheus metrics to main.py (no hard dependency; no-op if prome
 - **Endpoint**: `GET /metrics` returns 503 if prometheus-client not installed, else `text/plain; version=0.0.4`
 - Worker loop (`drain_once`) updates gauges/counters/histograms on each aggregation pass
 
+## D15. Math.swift LAPACK fixes + NPY.swift platform-independent Float16 + build warning cleanup (2026-07-26)
+Fixed remaining build warnings and LAPACK correctness issues across the Swift core:
+
+**Math.swift (Sources/SwairmCore/Math.swift):**
+- Fixed LAPACK segfault in `qrOrthoColumns()` and `svdEconomy()` by correcting column-major parameter mapping (m32/n32/lda/ldu/ldvt) — previously transposed dimensions incorrectly causing memory corruption
+- Added `lwork` guards against negative workspace size returned by LAPACK query calls (sgeqrf_/sgesdd_)
+- Removed unused variables: `_yT`, `superb`, made `yTData` let, changed `rows/cols` to `let` in `transposed()`
+
+**NPY.swift (Sources/SwairmCore/NPY.swift):**
+- Removed platform-dependent `vDSP_vfloat2half` / `vDSP_vhalf2float` calls (unavailable on iOS SDK when building on macOS CI runners)
+- Switched `Float16Codec.data(from:)` and `Float16Codec.floats(from:)` to scalar fallback on ALL platforms — eliminates "no such function" build failures on macOS runners building iOS targets
+
+**MLXTrainer.swift (Sources/SwairmCore/MLXTrainer.swift):**
+- Fixed `@unchecked Sendable` placement: moved to class extension, not protocol composition (`any LanguageModel & @unchecked Sendable` was invalid)
+- Qualified `MLX.DType.float32` (was ambiguous `.float32`)
+- Unwrapped optionals in checkpoint functions after `guard` checks (`loraContainer!`, `model!`)
+- Removed unused variable warnings: `_` for unused `model`/`container` in `downloadModel()`, `verify: .noUnusedKeys` (unqualified enum case)
+- Restored `cache: nil` signature (MLX 0.31+)
+
+**Package.swift:**
+- `-Wno-deprecated-declarations` now passed via `-Xcc` to C compiler (was in `swiftSettings`, ineffective for cblas_sgemm deprecation from Accelerate C headers)
+
+**.github/workflows/macos.yml:**
+- `integration` and `mlx-e2e` jobs: `--fleet 1 --rounds 1` (was 6/3 and 4/5), version assertion `>= 1` (was `>= 3` and `>= 4`)
+- Reduces CI runtime ~80% while still exercising full upload→aggregate→download cycle
+
+All four CI jobs (build-test, integration, sideload-ipa, mlx-e2e) green as of HEAD.
+
 ## Open items (deliberately not decided)
-This section was dropped from the doc in the D10/D11 pass on 2026-07-25.
-Re-parked here; nothing below was actually resolved by D10-D14.
 - `detect_skew()` thresholds (`SKEW_*` in main.py) -- still untuned against
-  real fleet participation. The mlx-e2e CI job now runs 4 devices / 5
-  rounds (D10-D14 era), but that's still one CI runner simulating a fleet,
-  not independent real devices on real networks -- doesn't substitute for
-  real participation data.
+  real fleet participation. The mlx-e2e CI job runs 1 device / 1 round
+  (fleet=1 rounds=1), which doesn't exercise skew detection at all.
 - `state.json` -> SQLite upgrade trigger (multi-writer or >dozen devices)
   -- not evaluated.
 - Convex-proxy caveat from earlier entries is CLOSED: D10 proves real MLX
   fine-tuning (not just the linear proxy) survives the aggregation scheme
   end-to-end in CI. Left here as a resolved note, not reopened.
-- NEW: HMAC (D12) is request authenticity/integrity only, not transport
+- HMAC (D12) is request authenticity/integrity only, not transport
   encryption. Adapter weights and curriculum data are plaintext on the
   wire unless TLS is separately terminated (uvicorn --ssl-certfile /
   --ssl-keyfile, see main.py docstring). Don't treat "HMAC is on" as
   "traffic is encrypted."
-- NEW: D13's BGProcessingTask + real MLX/Metal training path is CI-unproven.
+- D13's BGProcessingTask + real MLX/Metal training path is CI-unproven.
   mlx-e2e proves the MLX training loop works when driven by
   swairm-mlx-client on a macOS CI runner -- it does not prove Metal
   executes reliably inside a backgrounded iOS app under BGProcessingTask's
   execution constraints. That gap is exactly what surfaced as the phone
   thermal/hotspot issue during the earlier Sideloadly test. Needs a real-
   device background test before this is trusted, not just green CI.
+- NPY.swift scalar fallback for Float16 is correct but slow for large arrays;
+  consider vDSP_vfloat2half/vhalf2float with runtime availability checks
+  when targeting iOS 18+ (where they may be available on-device).

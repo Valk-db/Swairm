@@ -219,14 +219,12 @@ extension NPYArray {
         let shape = array.shape
 
         // Convert floats to bytes (little-endian float32) using vDSP
+        let bits = floats.map { $0.bitPattern }
         var data = Data(count: floats.count * 4)
         data.withUnsafeMutableBytes { ptr in
-            let dst = ptr.bindMemory(to: UInt8.self).baseAddress!
-            floats.withUnsafeBufferPointer { src in
-                // vDSP_vspdp copies float32 -> float64, but we want float32 -> bytes
-                // Just memcpy since Float is already IEEE 754 little-endian on Apple platforms
-                let bytes = UnsafeRawBufferPointer(src)
-                memcpy(dst, bytes.baseAddress, bytes.count)
+            let dst = ptr.bindMemory(to: UInt32.self).baseAddress!
+            bits.withUnsafeBufferPointer { src in
+                memcpy(dst, src.baseAddress, bytes.count)
             }
         }
 

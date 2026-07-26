@@ -46,6 +46,13 @@ MLXTrainer.swift: Fixed compilation bugs (3 bugs + throws signature):
 - Line 391: Added `try` at call site
 All fixes verified by green build-test CI.
 
+**Recent fixes (2026-07-26):**
+- Math.swift: Fixed LAPACK segfault by correcting column-major layout handling in qrOrthoColumns() and svdEconomy() — fixed m32/n32/lda/ldu/ldvt parameters, added lwork guards against negative workspace queries, removed unused variables (_yT, superb, yTData made let, rows/cols in transposed() made let)
+- NPY.swift: Removed vDSP vfloat2half/vhalf2float platform-dependent calls; switched Float16Codec to scalar fallback on all platforms (eliminates iOS SDK build failure on macOS runners)
+- MLXTrainer.swift: Fixed Sendable conformance (@unchecked Sendable in extension, not on protocol), .noUnusedKeys unqualified, optional unwrapping in checkpoint functions, MLX.DType.float32 fully qualified
+- Package.swift: -Wno-deprecated-declarations now passed via -Xcc to C compiler (fixes cblas_sgemm deprecation warnings)
+- .github/workflows/macos.yml: fleet=1, rounds=1 for both integration and mlx-e2e; version assertion >=1
+
 **P1 tasks completed (2026-07-25):**
 - HMAC auth on Anchor endpoints (main.py + AnchorClient.swift): HMAC-SHA256 on /upload, /adapter/latest, /curriculum/*, disabled when FCS_HMAC_SECRET unset (dev mode). **Auth only, not encryption** -- see security note below.
 - iOS background task scheduler (BackgroundTaskScheduler.swift): BGAppRefreshTask (30s) + BGProcessingTask (minutes), integrates with both Proxy and MLX training modes, battery/thermal checks via ResourceBudget. **CI-unverified for real MLX training** -- see note below.

@@ -37,9 +37,9 @@ public struct Matrix: Equatable, Sendable {
     public func transposed() -> Matrix {
         var out = Matrix(rows: cols, cols: rows)
         // vDSP_mtrans for efficient transpose
-        let rows = vDSP_Length(rows)
-        let cols = vDSP_Length(cols)
-        vDSP_mtrans(data, 1, &out.data, 1, cols, rows)
+        let m = vDSP_Length(rows)
+        let n = vDSP_Length(cols)
+        vDSP_mtrans(data, 1, &out.data, 1, n, m)
         return out
     }
 

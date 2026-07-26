@@ -197,7 +197,7 @@ public actor MLXTrainer: LocalTraining {
     public let config: MLXTrainerConfig
 
     // Training state
-    private var model: (any LanguageModel)?
+    private var model: (@unchecked Sendable (any LanguageModel))?
     private var loraContainer: LoRAContainer?
     private var optimizer: AdamW?
     private var stepCount = 0
