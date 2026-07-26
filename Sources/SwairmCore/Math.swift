@@ -314,10 +314,12 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     // Transpose to column-major for LAPACK: (m × n) row-major → (n × m) col-major
     var aColMajor = a.transposed()  // n rows, m cols in row-major = m rows, n cols in col-major
     var s = [Float](repeating: 0, count: k)
-    // U in col-major: m × k → row-major: k × m
-    var uColMajor = Matrix(rows: k, cols: m)
-    // Vt in col-major: k × n → row-major: n × k
-    var vtColMajor = Matrix(rows: n, cols: k)
+    // sgesdd on A^T returns U' = V and V'^T = U^T
+    // We need U = V'^T and V^T = U'^T
+    // U' (col-major): m × k → row-major: k × m
+    // V'^T (col-major): k × n → row-major: n × k
+    var uPrimeColMajor = Matrix(rows: k, cols: m)  // receives V'^T = U^T
+    var vtPrimeColMajor = Matrix(rows: n, cols: k)  // receives U' = V
     var superb = [Float](repeating: 0, count: k - 1)
 
     // sgesdd: jobz = 'S' (economy size)
@@ -331,8 +333,8 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
 
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
         s.withUnsafeMutableBufferPointer { sPtr in
-            uColMajor.data.withUnsafeMutableBufferPointer { uPtr in
-                vtColMajor.data.withUnsafeMutableBufferPointer { vtPtr in
+            uPrimeColMajor.data.withUnsafeMutableBufferPointer { uPtr in
+                vtPrimeColMajor.data.withUnsafeMutableBufferPointer { vtPtr in
                     work.withUnsafeMutableBufferPointer { workPtr in
                         iwork.withUnsafeMutableBufferPointer { iworkPtr in
                             var m32 = Int32(n)  // col-major rows = n
@@ -356,13 +358,13 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     work = [Float](repeating: 0, count: Int(lwork))
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
         s.withUnsafeMutableBufferPointer { sPtr in
-            uColMajor.data.withUnsafeMutableBufferPointer { uPtr in
-                vtColMajor.data.withUnsafeMutableBufferPointer { vtPtr in
+            uPrimeColMajor.data.withUnsafeMutableBufferPointer { uPtr in
+                vtPrimeColMajor.data.withUnsafeMutableBufferPointer { vtPtr in
                     work.withUnsafeMutableBufferPointer { workPtr in
                         iwork.withUnsafeMutableBufferPointer { iworkPtr in
                             var m32 = Int32(n)
                             var n32 = Int32(m)
-                            var lda = Int32(m)  // leading dim for col-major = m (original rows)
+                            var lda = Int32(m)
                             var ldu32 = ldu
                             var ldvt32 = ldvt
                             var lwork32 = lwork
@@ -377,11 +379,11 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     }
     precondition(info == 0, "sgesdd failed: \(info)")
 
-    // Transpose results back to row-major
-    // uColMajor is k × m (col-major U = m × k) → transpose to m × k
-    let uRowMajor = uColMajor.transposed()
-    // vtColMajor is n × k (col-major V^T = k × n) → transpose to k × n
-    let vtRowMajor = vtColMajor.transposed()
+    // Transpose results back to row-major and swap U/V^T
+    // uPrimeColMajor (k×m in row-major = U'^T) → transpose to m×k = U
+    let uRowMajor = uPrimeColMajor.transposed()
+    // vtPrimeColMajor (n×k in row-major = V') → transpose to k×n = V^T
+    let vtRowMajor = vtPrimeColMajor.transposed()
 
     // Truncate to rank r
     var uTrunc = Matrix(rows: m, cols: r)
