@@ -32,7 +32,7 @@ let package = Package(
                 "ZIPFoundation"
             ],
             swiftSettings: [
-                .unsafeFlags(["-Wno-deprecated-declarations"])
+                .unsafeFlags(["-Xcc", "-Wno-deprecated-declarations"])
             ]
         ),
         .executableTarget(
