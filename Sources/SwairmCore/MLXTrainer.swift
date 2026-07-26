@@ -518,7 +518,7 @@ public actor MLXTrainer: LocalTraining {
         }
 
         let params = ModuleParameters.unflattened(mlxParams)
-        try model?.update(parameters: params, verify: ModuleParameters.Verify.noUnusedKeys)
+        try model?.update(parameters: params, verify: .noUnusedKeys)
     }
 
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
@@ -528,7 +528,7 @@ public actor MLXTrainer: LocalTraining {
         // Pass model as explicit argument to avoid capturing the `var model` reference
         func inner(parameters: ModuleParameters, arrays: [MLXArray]) -> [MLXArray] {
             model.update(parameters: parameters)
-            let logits = model(arrays[0], cache: [] as [MLXArray]?)
+            let logits = model(arrays[0], cache: nil)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = arrays[1].reshaped(-1)
             return [crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)]
@@ -590,7 +590,7 @@ extension MLXTrainer {
     /// Save training checkpoint to an NPZ file.
     /// Contains: step count, LoRA parameters, model parameters, RNG state.
     public func saveCheckpoint(to url: URL) async throws {
-        guard let container = loraContainer, let model = model else {
+        guard loraContainer != nil, model != nil else {
             throw TrainingError.notPrepared
         }
 
@@ -632,7 +632,7 @@ extension MLXTrainer {
     /// Load training checkpoint from an NPZ file.
     /// Restores: step count, LoRA parameters, model parameters, RNG state.
     public func loadCheckpoint(from url: URL) async throws {
-        guard let container = loraContainer, let model = model else {
+        guard loraContainer != nil, model != nil else {
             throw TrainingError.notPrepared
         }
 
