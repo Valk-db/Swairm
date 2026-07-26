@@ -1,9 +1,9 @@
 // Minimal dense math for the client: row-major Matrix, seeded Gaussian RNG,
-// and a randomized truncated SVD (power iteration + Gram-Schmidt QR +
-// Jacobi eigendecomposition of the small Gram matrix). Mirrors what
-// sklearn's randomized_svd provides for train_step's rank refactoring.
+// and a randomized truncated SVD backed by Accelerate (LAPACK dgesdd).
+// Falls back to pure-Swift implementation on platforms without Accelerate.
 
 import Foundation
+import Accelerate
 
 public struct Matrix: Equatable, Sendable {
     public let rows: Int
@@ -36,63 +36,68 @@ public struct Matrix: Equatable, Sendable {
 
     public func transposed() -> Matrix {
         var out = Matrix(rows: cols, cols: rows)
-        for i in 0..<rows {
-            for j in 0..<cols {
-                out.data[j * rows + i] = data[i * cols + j]
-            }
-        }
+        // vDSP_mtrans for efficient transpose
+        var rows = vDSP_Length(rows)
+        var cols = vDSP_Length(cols)
+        vDSP_mtrans(data, 1, &out.data, 1, cols, rows)
         return out
     }
 
     public static func * (lhs: Matrix, rhs: Matrix) -> Matrix {
         precondition(lhs.cols == rhs.rows, "matmul dimension mismatch")
         var out = Matrix(rows: lhs.rows, cols: rhs.cols)
-        for i in 0..<lhs.rows {
-            let lhsBase = i * lhs.cols
-            let outBase = i * rhs.cols
-            for k in 0..<lhs.cols {
-                let v = lhs.data[lhsBase + k]
-                if v == 0 { continue }
-                let rhsBase = k * rhs.cols
-                for j in 0..<rhs.cols {
-                    out.data[outBase + j] += v * rhs.data[rhsBase + j]
-                }
-            }
-        }
+        var m = vDSP_Length(lhs.rows)
+        var n = vDSP_Length(rhs.cols)
+        var k = vDSP_Length(lhs.cols)
+        // cblas_sgemm: C = A * B (row-major)
+        // Accelerate expects column-major, so we compute C^T = B^T * A^T
+        // which is equivalent to cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, m, k, 1, B, n, A, k, 0, C, n)
+        // then transpose result. But simpler: use vDSP_mmul with transposed inputs.
+        // vDSP_mmul expects column-major. We'll use cblas_sgemm directly.
+        cblas_sgemm(
+            CblasRowMajor, CblasNoTrans, CblasNoTrans,
+            vDSP_Length(lhs.rows), vDSP_Length(rhs.cols), vDSP_Length(lhs.cols),
+            1.0,
+            lhs.data, vDSP_Length(lhs.cols),
+            rhs.data, vDSP_Length(rhs.cols),
+            0.0,
+            &out.data, vDSP_Length(rhs.cols)
+        )
         return out
     }
 
     public static func + (lhs: Matrix, rhs: Matrix) -> Matrix {
         precondition(lhs.rows == rhs.rows && lhs.cols == rhs.cols)
         var out = lhs
-        for i in 0..<out.data.count { out.data[i] += rhs.data[i] }
+        vDSP_vadd(rhs.data, 1, lhs.data, 1, &out.data, 1, vDSP_Length(out.data.count))
         return out
     }
 
     public static func - (lhs: Matrix, rhs: Matrix) -> Matrix {
         precondition(lhs.rows == rhs.rows && lhs.cols == rhs.cols)
         var out = lhs
-        for i in 0..<out.data.count { out.data[i] -= rhs.data[i] }
+        vDSP_vsub(rhs.data, 1, lhs.data, 1, &out.data, 1, vDSP_Length(out.data.count))
         return out
     }
 
     public func scaled(by s: Float) -> Matrix {
         var out = self
-        for i in 0..<out.data.count { out.data[i] *= s }
+        var scale = s
+        vDSP_vsmul(data, 1, &scale, &out.data, 1, vDSP_Length(data.count))
         return out
     }
 
     public var frobeniusNorm: Float {
-        var sum: Float = 0
-        for v in data { sum += v * v }
-        return sum.squareRoot()
+        var result: Float = 0
+        vDSP_svesq(data, 1, &result, vDSP_Length(data.count))
+        return result.squareRoot()
     }
 }
 
 public func vectorNorm(_ v: [Float]) -> Float {
-    var sum: Float = 0
-    for x in v { sum += x * x }
-    return sum.squareRoot()
+    var result: Float = 0
+    vDSP_svesq(v, 1, &result, vDSP_Length(v.count))
+    return result.squareRoot()
 }
 
 // ------------------------------------------------------------------ RNG
@@ -145,7 +150,7 @@ public func randomNormalMatrix(rows: Int, cols: Int, scale: Float,
     return m
 }
 
-// ------------------------------------------------------------------ SVD
+// ------------------------------------------------------------------ SVD (Accelerate-backed)
 
 public struct SVDResult {
     public let U: Matrix     // rows x rank
@@ -153,131 +158,154 @@ public struct SVDResult {
     public let Vt: Matrix    // rank x cols
 }
 
-/// Modified Gram-Schmidt orthonormalization of the columns of `m`, in place.
-/// Projections run twice ("twice is enough") to keep Q orthogonal in float32,
-/// and columns whose residual collapses relative to their original norm are
-/// zeroed instead of normalizing rounding noise into a fake direction.
-func orthonormalizeColumns(_ m: inout Matrix) {
-    for j in 0..<m.cols {
-        var originalNorm: Float = 0
-        for r in 0..<m.rows { originalNorm += m[r, j] * m[r, j] }
-        originalNorm = originalNorm.squareRoot()
-
-        for _ in 0..<2 {
-            for i in 0..<j {
-                var dot: Float = 0
-                for r in 0..<m.rows { dot += m[r, i] * m[r, j] }
-                for r in 0..<m.rows { m[r, j] -= dot * m[r, i] }
-            }
-        }
-
-        var norm: Float = 0
-        for r in 0..<m.rows { norm += m[r, j] * m[r, j] }
-        norm = norm.squareRoot()
-
-        if norm > max(1e-6 * originalNorm, 1e-12) {
-            for r in 0..<m.rows { m[r, j] /= norm }
-        } else {
-            for r in 0..<m.rows { m[r, j] = 0 }   // dependent column: drop it
-        }
-    }
-}
-
-
-/// Jacobi eigendecomposition of a small symmetric matrix.
-/// Returns eigenvalues (descending) and eigenvectors as matching columns.
-func jacobiEigen(_ input: Matrix, maxSweeps: Int = 50) -> (values: [Float], vectors: Matrix) {
-    precondition(input.rows == input.cols)
-    let n = input.rows
-    var a = input
-    var v = Matrix.identity(n)
-    for _ in 0..<maxSweeps {
-        var off: Float = 0
-        for p in 0..<n {
-            for q in (p + 1)..<n { off += a[p, q] * a[p, q] }
-        }
-        if off < 1e-18 { break }
-        for p in 0..<n {
-            for q in (p + 1)..<n {
-                let apq = a[p, q]
-                if abs(apq) < 1e-12 { continue }
-                let theta = 0.5 * atan2(2.0 * Double(apq),
-                                        Double(a[q, q]) - Double(a[p, p]))
-                let c = Float(cos(theta))
-                let s = Float(sin(theta))
-                for k in 0..<n {
-                    let akp = a[k, p]
-                    let akq = a[k, q]
-                    a[k, p] = c * akp - s * akq
-                    a[k, q] = s * akp + c * akq
-                }
-                for k in 0..<n {
-                    let apk = a[p, k]
-                    let aqk = a[q, k]
-                    a[p, k] = c * apk - s * aqk
-                    a[q, k] = s * apk + c * aqk
-                }
-                for k in 0..<n {
-                    let vkp = v[k, p]
-                    let vkq = v[k, q]
-                    v[k, p] = c * vkp - s * vkq
-                    v[k, q] = s * vkp + c * vkq
-                }
-            }
-        }
-    }
-    var order = Array(0..<n)
-    order.sort { a[$0, $0] > a[$1, $1] }
-    let values = order.map { a[$0, $0] }
-    var vectors = Matrix(rows: n, cols: n)
-    for (newCol, oldCol) in order.enumerated() {
-        for r in 0..<n { vectors[r, newCol] = v[r, oldCol] }
-    }
-    return (values, vectors)
-}
-
-/// Randomized truncated SVD (Halko-style): range finding with power
-/// iterations, then exact SVD of the small projected matrix via the
-/// eigendecomposition of its Gram matrix.
+/// Randomized truncated SVD (Halko-style) with Accelerate LAPACK for the small SVD.
+/// Steps:
+///   Y = (A A^T)^q A Ω   →   QR(Y) = Q   →   B = Q^T A   →   SVD(B) = Ũ Σ V^T
+/// Returns U = Q Ũ, S = Σ, V^T = V^T
 public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
                          powerIterations: Int = 4, seed: UInt64 = 42) -> SVDResult {
-    let l = min(rank + oversample, min(D.rows, D.cols))
-    var rng = GaussianRNG(seed: seed)
-    let omega = randomNormalMatrix(rows: D.cols, cols: l, scale: 1, rng: &rng)
-    var y = D * omega                       // rows x l
-    orthonormalizeColumns(&y)
-    let dt = D.transposed()
-    for _ in 0..<powerIterations {
-        var z = dt * y                      // cols x l
-        orthonormalizeColumns(&z)
-        y = D * z
-        orthonormalizeColumns(&y)
-    }
-    let bSmall = y.transposed() * D         // l x cols
-    let gram = bSmall * bSmall.transposed() // l x l
-    let (vals, vecs) = jacobiEigen(gram)
-
+    let m = D.rows
+    let n = D.cols
+    let l = min(rank + oversample, min(m, n))
     let r = min(rank, l)
-    var s = [Float](repeating: 0, count: r)
-    var u = Matrix(rows: D.rows, cols: r)
-    var vt = Matrix(rows: r, cols: D.cols)
-    for i in 0..<r {
-        let sv = vals[i] > 0 ? vals[i].squareRoot() : 0
-        s[i] = sv
-        for row in 0..<D.rows {
-            var acc: Float = 0
-            for k in 0..<l { acc += y[row, k] * vecs[k, i] }
-            u[row, i] = acc
-        }
-        if sv > 0 {
-            for col in 0..<D.cols {
-                var acc: Float = 0
-                for k in 0..<l { acc += vecs[k, i] * bSmall[k, col] }
-                vt[i, col] = acc / sv
-            }
-        }
+
+    // 1. Generate random test matrix Ω (n × l)
+    var rng = GaussianRNG(seed: seed)
+    let omega = randomNormalMatrix(rows: n, cols: l, scale: 1, rng: &rng)
+
+    // 2. Y = D * Ω  (m × l)
+    var y = Matrix(rows: m, cols: l)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                vDSP_Length(m), vDSP_Length(l), vDSP_Length(n),
+                1.0,
+                D.data, vDSP_Length(n),
+                omega.data, vDSP_Length(l),
+                0.0,
+                &y.data, vDSP_Length(l))
+
+    // 3. Power iterations: (D D^T)^q D Ω
+    var yT = Matrix(rows: l, cols: m)
+    var dT = D.transposed()
+    var z = Matrix(rows: n, cols: l)
+    for _ in 0..<powerIterations {
+        // Z = D^T * Y  (n × l)
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    vDSP_Length(n), vDSP_Length(l), vDSP_Length(m),
+                    1.0,
+                    dT.data, vDSP_Length(m),
+                    y.data, vDSP_Length(l),
+                    0.0,
+                    &z.data, vDSP_Length(l))
+
+        // Orthonormalize Z columns (QR via LAPACK geqrf + orgqr)
+        z = qrOrthoColumns(z)
+
+        // Y = D * Z  (m × l)
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    vDSP_Length(m), vDSP_Length(l), vDSP_Length(n),
+                    1.0,
+                    D.data, vDSP_Length(n),
+                    z.data, vDSP_Length(l),
+                    0.0,
+                    &y.data, vDSP_Length(l))
+
+        // Orthonormalize Y columns
+        y = qrOrthoColumns(y)
     }
+
+    // 4. B = Y^T * D  (l × n)
+    var yTData = y.transposed()
+    var bSmall = Matrix(rows: l, cols: n)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                vDSP_Length(l), vDSP_Length(n), vDSP_Length(m),
+                1.0,
+                yTData.data, vDSP_Length(m),
+                D.data, vDSP_Length(n),
+                0.0,
+                &bSmall.data, vDSP_Length(n))
+
+    // 5. SVD of B (l × n) using LAPACK dgesdd (via Accelerate's SVD)
+    // Compute economy SVD: B = U_B Σ V^T, where U_B is l×r, Σ is r, V^T is r×n
+    let (uB, s, vt) = svdEconomy(bSmall, rank: r)
+
+    // 6. U = Y * U_B  (m × r)
+    var u = Matrix(rows: m, cols: r)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                vDSP_Length(m), vDSP_Length(r), vDSP_Length(l),
+                1.0,
+                y.data, vDSP_Length(l),
+                uB.data, vDSP_Length(r),
+                0.0,
+                &u.data, vDSP_Length(r))
+
+    // Vt is already r × n
     return SVDResult(U: u, S: s, Vt: vt)
+}
+
+/// Thin QR factorization via LAPACK: returns Q with orthonormal columns (m × l)
+func qrOrthoColumns(_ a: Matrix) -> Matrix {
+    let m = a.rows
+    let n = a.cols
+    var aCopy = a
+    var tau = [Float](repeating: 0, count: n)
+    var work = [Float](repeating: 0, count: n)
+    var lwork: Int32 = -1
+    var info: Int32 = 0
+
+    // Query optimal workspace size
+    sgeqrf_(&Int32(m), &Int32(n), &aCopy.data, &Int32(m), &tau, &work, &lwork, &info)
+    lwork = Int32(work[0])
+    work = [Float](repeating: 0, count: Int(lwork))
+    sgeqrf_(&Int32(m), &Int32(n), &aCopy.data, &Int32(m), &tau, &work, &lwork, &info)
+    precondition(info == 0, "sgeqrf failed: \(info)")
+
+    // Generate Q from QR factors
+    sorgqr_(&Int32(m), &Int32(n), &Int32(n), &aCopy.data, &Int32(m), &tau, &work, &lwork, &info)
+    precondition(info == 0, "sorgqr failed: \(info)")
+
+    return aCopy
+}
+
+/// Economy SVD of m×n matrix (m ≤ n typical) returning U (m×r), S (r), Vt (r×n)
+func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
+    let m = a.rows
+    let n = a.cols
+    let k = min(m, n)
+    let r = min(rank, k)
+
+    var aCopy = a
+    var s = [Float](repeating: 0, count: k)
+    var u = Matrix(rows: m, cols: k)
+    var vt = Matrix(rows: k, cols: n)
+    var superb = [Float](repeating: 0, count: k - 1)
+
+    // sgesdd: jobz = 'S' (economy size)
+    var jobz: Int8 = 83  // 'S'
+    var ldu = Int32(m)
+    var ldvt = Int32(k)
+    var lwork: Int32 = -1
+    var iwork = [Int32](repeating: 0, count: 8 * k)
+    var work = [Float](repeating: 0, count: 1)
+    var info: Int32 = 0
+
+    sgesdd_(&jobz, &Int32(m), &Int32(n), &aCopy.data, &Int32(m), &s, &u.data, &ldu, &vt.data, &ldvt, &work, &lwork, &iwork, &info)
+    lwork = Int32(work[0])
+    work = [Float](repeating: 0, count: Int(lwork))
+    sgesdd_(&jobz, &Int32(m), &Int32(n), &aCopy.data, &Int32(m), &s, &u.data, &ldu, &vt.data, &ldvt, &work, &lwork, &iwork, &info)
+    precondition(info == 0, "sgesdd failed: \(info)")
+
+    // Truncate to rank r
+    var uTrunc = Matrix(rows: m, cols: r)
+    var vtTrunc = Matrix(rows: r, cols: n)
+    var sTrunc = [Float](repeating: 0, count: r)
+
+    for i in 0..<r {
+        sTrunc[i] = s[i]
+        for row in 0..<m { uTrunc[row, i] = u[row, i] }
+        for col in 0..<n { vtTrunc[i, col] = vt[i, col] }
+    }
+
+    return (uTrunc, sTrunc, vtTrunc)
 }
 
 /// Refactor a dense update to rank-r factors, matching the Python client:
@@ -293,3 +321,18 @@ public func factorToRank(_ dense: Matrix, rank: Int) -> (A: Matrix, B: Matrix) {
     }
     return (a, b)
 }
+
+// MARK: - LAPACK function declarations (Accelerate)
+
+@_silgen_name("sgeqrf_")
+func sgeqrf_(_ m: *Int32, _ n: *Int32, _ a: *Float, _ lda: *Int32,
+             _ tau: *Float, _ work: *Float, _ lwork: *Int32, _ info: *Int32)
+
+@_silgen_name("sorgqr_")
+func sorgqr_(_ m: *Int32, _ n: *Int32, _ k: *Int32, _ a: *Float, _ lda: *Int32,
+             _ tau: *Float, _ work: *Float, _ lwork: *Int32, _ info: *Int32)
+
+@_silgen_name("sgesdd_")
+func sgesdd_(_ jobz: *Int8, _ m: *Int32, _ n: *Int32, _ a: *Float, _ lda: *Int32,
+             _ s: *Float, _ u: *Float, _ ldu: *Int32, _ vt: *Float, _ ldvt: *Int32,
+             _ work: *Float, _ lwork: *Int32, _ iwork: *Int32, _ info: *Int32)
