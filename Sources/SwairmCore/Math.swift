@@ -254,7 +254,7 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
             work.withUnsafeMutableBufferPointer { workPtr in
                 var m32 = Int32(n)  // col-major rows = n
                 var n32 = Int32(m)  // col-major cols = m
-                var lda = Int32(n)  // leading dim for col-major = n
+                var lda = Int32(m)  // leading dim for col-major = m (original rows)
                 var lwork32 = lwork
                 var info32 = info
                 sgeqrf_(&m32, &n32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
@@ -271,7 +271,7 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
             work.withUnsafeMutableBufferPointer { workPtr in
                 var m32 = Int32(n)
                 var n32 = Int32(m)
-                var lda = Int32(n)
+                var lda = Int32(m)  // leading dim for col-major = m (original rows)
                 var lwork32 = lwork
                 var info32 = info
                 sgeqrf_(&m32, &n32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
@@ -289,7 +289,7 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
                 var m32 = Int32(n)
                 var n32 = Int32(min(m, n))
                 var k32 = Int32(min(m, n))
-                var lda = Int32(n)
+                var lda = Int32(m)  // leading dim for col-major = m (original rows)
                 var lwork32 = lwork
                 var info32 = info
                 sorgqr_(&m32, &n32, &k32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
@@ -337,7 +337,7 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
                         iwork.withUnsafeMutableBufferPointer { iworkPtr in
                             var m32 = Int32(n)  // col-major rows = n
                             var n32 = Int32(m)  // col-major cols = m
-                            var lda = Int32(n)  // leading dim for col-major = n
+                            var lda = Int32(m)  // leading dim for col-major = m (original rows)
                             var ldu32 = ldu
                             var ldvt32 = ldvt
                             var lwork32 = lwork
@@ -362,7 +362,7 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
                         iwork.withUnsafeMutableBufferPointer { iworkPtr in
                             var m32 = Int32(n)
                             var n32 = Int32(m)
-                            var lda = Int32(n)
+                            var lda = Int32(m)  // leading dim for col-major = m (original rows)
                             var ldu32 = ldu
                             var ldvt32 = ldvt
                             var lwork32 = lwork
