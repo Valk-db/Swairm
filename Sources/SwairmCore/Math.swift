@@ -265,6 +265,9 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
     }
     precondition(info == 0, "sgeqrf query failed: \(info)")
 
+    // Guard against negative lwork from query
+    if lwork <= 0 { lwork = Int32(max(m, n) * 8) }
+
     work = [Float](repeating: 0, count: Int(lwork))
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
         tau.withUnsafeMutableBufferPointer { tauPtr in
@@ -298,6 +301,9 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
         }
     }
     precondition(info == 0, "sorgqr failed: \(info)")
+
+    // Guard against negative lwork from query (use same workspace)
+    if lwork <= 0 { lwork = Int32(max(m, n) * 8) }
 
     // aColMajor now holds Q in col-major (m×min(m,n)); transpose back to row-major (min(m,n)×m)
     return aColMajor.transposed()
@@ -354,6 +360,9 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
         }
     }
     precondition(info == 0, "sgesdd query failed: \(info)")
+
+    // Guard against negative lwork from query
+    if lwork <= 0 { lwork = Int32(max(m, n) * 8) }
 
     work = [Float](repeating: 0, count: Int(lwork))
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
