@@ -4,6 +4,7 @@
 
 import MLX
 import Foundation
+import Accelerate
 
 public enum Float16Codec {
     public static func encode(_ value: Float) -> UInt16 {
@@ -54,23 +55,37 @@ public enum Float16Codec {
     }
 
     public static func data(from floats: [Float]) -> Data {
-        var out = Data(capacity: floats.count * 2)
-        for f in floats {
-            let h = encode(f)
-            out.append(UInt8(h & 0xFF))
-            out.append(UInt8(h >> 8))
+        guard !floats.isEmpty else { return Data() }
+        var out = Data(count: floats.count * 2)
+        out.withUnsafeMutableBytes { ptr in
+            let dst = ptr.bindMemory(to: UInt16.self).baseAddress!
+            floats.withUnsafeBufferPointer { src in
+                vDSP_vfloat2half(src.baseAddress!, 1, dst, 1, vDSP_Length(floats.count))
+            }
         }
+        // vDSP produces native-endian; wire format is little-endian
+        #if arch(i386) || arch(x86_64) || arch(arm64)
+        // Apple platforms are little-endian; no byte swap needed
+        #else
+        // Big-endian fallback (not used in practice)
+        for i in 0..<floats.count {
+            let h = encode(floats[i])
+            out[i * 2] = UInt8(h & 0xFF)
+            out[i * 2 + 1] = UInt8(h >> 8)
+        }
+        #endif
         return out
     }
 
     public static func floats(from data: Data) -> [Float] {
-        let bytes = [UInt8](data)
-        var out = [Float]()
-        out.reserveCapacity(bytes.count / 2)
-        var i = 0
-        while i + 1 < bytes.count {
-            out.append(decode(UInt16(bytes[i]) | (UInt16(bytes[i + 1]) << 8)))
-            i += 2
+        let count = data.count / 2
+        guard count > 0 else { return [] }
+        var out = [Float](repeating: 0, count: count)
+        data.withUnsafeBytes { ptr in
+            let src = ptr.bindMemory(to: UInt16.self).baseAddress!
+            out.withUnsafeMutableBufferPointer { dst in
+                vDSP_vhalf2float(src, 1, dst.baseAddress!, 1, vDSP_Length(count))
+            }
         }
         return out
     }
@@ -207,14 +222,16 @@ extension NPYArray {
         let floats = flat.asArray(Float.self)
         let shape = array.shape
 
-        // Convert floats to bytes (little-endian float32)
-        var data = Data(capacity: floats.count * 4)
-        for f in floats {
-            var bits = f.bitPattern
-            data.append(UInt8(bits & 0xFF))
-            data.append(UInt8((bits >> 8) & 0xFF))
-            data.append(UInt8((bits >> 16) & 0xFF))
-            data.append(UInt8((bits >> 24) & 0xFF))
+        // Convert floats to bytes (little-endian float32) using vDSP
+        var data = Data(count: floats.count * 4)
+        data.withUnsafeMutableBytes { ptr in
+            let dst = ptr.bindMemory(to: UInt8.self).baseAddress!
+            floats.withUnsafeBufferPointer { src in
+                // vDSP_vspdp copies float32 -> float64, but we want float32 -> bytes
+                // Just memcpy since Float is already IEEE 754 little-endian on Apple platforms
+                let bytes = UnsafeRawBufferPointer(src)
+                memcpy(dst, bytes.baseAddress, bytes.count)
+            }
         }
 
         return NPYArray(descr: "<f4", shape: shape, raw: data)
