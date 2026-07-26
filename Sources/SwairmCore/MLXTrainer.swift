@@ -197,7 +197,7 @@ public actor MLXTrainer: LocalTraining {
     public let config: MLXTrainerConfig
 
     // Training state
-    private var model: (@unchecked Sendable & AnyObject)?
+    private var model: (any LanguageModel)?
     private var loraContainer: LoRAContainer?
     private var optimizer: AdamW?
     private var stepCount = 0
@@ -518,7 +518,7 @@ public actor MLXTrainer: LocalTraining {
         }
 
         let params = ModuleParameters.unflattened(mlxParams)
-        try model?.update(parameters: params, verify: .noUnusedKeys)
+        try model?.update(parameters: params, verify: ModuleParameters.Verify.noUnusedKeys)
     }
 
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
@@ -528,7 +528,7 @@ public actor MLXTrainer: LocalTraining {
         // Pass model as explicit argument to avoid capturing the `var model` reference
         func inner(parameters: ModuleParameters, arrays: [MLXArray]) -> [MLXArray] {
             model.update(parameters: parameters)
-            let logits = model(arrays[0], cache: nil)
+            let logits = model(arrays[0], cache: [] as [MLXArray]?)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = arrays[1].reshaped(-1)
             return [crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)]
@@ -569,7 +569,7 @@ public actor MLXTrainer: LocalTraining {
     }
 
     private func mlxArrayToMatrix(_ array: MLXArray) throws -> Matrix {
-        let flattened = array.flattened().asType(.float32)
+        let flattened = array.flattened().asType(MLX.DType.float32)
         let floats = flattened.asArray(Float.self)
         let shape = array.shape
         guard shape.count == 2 else { throw NPYError.unsupportedDtype("expected 2D array") }
@@ -577,7 +577,7 @@ public actor MLXTrainer: LocalTraining {
     }
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
-        return array.flattened().asType(.float32).asArray(Float.self)
+        return array.flattened().asType(MLX.DType.float32).asArray(Float.self)
     }
 }
 
@@ -590,7 +590,7 @@ extension MLXTrainer {
     /// Save training checkpoint to an NPZ file.
     /// Contains: step count, LoRA parameters, model parameters, RNG state.
     public func saveCheckpoint(to url: URL) async throws {
-        guard loraContainer != nil, model != nil else {
+        guard let container = loraContainer, let model = model else {
             throw TrainingError.notPrepared
         }
 
@@ -605,10 +605,10 @@ extension MLXTrainer {
         // 2. LoRA parameters (flattened)
         let loraParams = container.parameters.flattened()
         for (name, tensor) in loraParams {
-            let flat = tensor.flattened().asType(.float32)
+            let flat = tensor.flattened().asType(MLX.DType.float32)
             let floats = flat.asArray(Float.self)
             let shape = tensor.shape
-            let array = MLXArray(floats, shape).asType(.float32)
+            let array = MLXArray(floats, shape).asType(MLX.DType.float32)
             let npyArray = try NPYArray.fromMLXArray(array)
             arrays.append(("lora_\(name)", npyArray))
         }
@@ -616,10 +616,10 @@ extension MLXTrainer {
         // 3. Save model parameters (allows optimizer re-initialization on resume)
         let modelParams = try getModelParameters()
         for (name, tensor) in modelParams.flattened() {
-            let flat = tensor.flattened().asType(.float32)
+            let flat = tensor.flattened().asType(MLX.DType.float32)
             let floats = flat.asArray(Float.self)
             let shape = tensor.shape
-            let array = MLXArray(floats, shape).asType(.float32)
+            let array = MLXArray(floats, shape).asType(MLX.DType.float32)
             let npyArray = try NPYArray.fromMLXArray(array)
             arrays.append(("model_\(name)", npyArray))
         }
@@ -632,7 +632,7 @@ extension MLXTrainer {
     /// Load training checkpoint from an NPZ file.
     /// Restores: step count, LoRA parameters, model parameters, RNG state.
     public func loadCheckpoint(from url: URL) async throws {
-        guard loraContainer != nil, model != nil else {
+        guard let container = loraContainer, let model = model else {
             throw TrainingError.notPrepared
         }
 
