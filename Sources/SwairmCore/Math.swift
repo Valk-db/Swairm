@@ -253,14 +253,53 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
     var info: Int32 = 0
 
     // Query optimal workspace size
-    sgeqrf_(&Int32(m), &Int32(n), &aCopy.data, &Int32(m), &tau, &work, &lwork, &info)
-    lwork = Int32(work[0])
+    aCopy.data.withUnsafeMutableBufferPointer { aPtr in
+        tau.withUnsafeMutableBufferPointer { tauPtr in
+            work.withUnsafeMutableBufferPointer { workPtr in
+                var m32 = Int32(m)
+                var n32 = Int32(n)
+                var lda = Int32(m)
+                var lwork32 = lwork
+                var info32 = info
+                sgeqrf_(&m32, &n32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
+                lwork = lwork32
+                info = info32
+            }
+        }
+    }
+    precondition(info == 0, "sgeqrf query failed: \(info)")
+
     work = [Float](repeating: 0, count: Int(lwork))
-    sgeqrf_(&Int32(m), &Int32(n), &aCopy.data, &Int32(m), &tau, &work, &lwork, &info)
+    aCopy.data.withUnsafeMutableBufferPointer { aPtr in
+        tau.withUnsafeMutableBufferPointer { tauPtr in
+            work.withUnsafeMutableBufferPointer { workPtr in
+                var m32 = Int32(m)
+                var n32 = Int32(n)
+                var lda = Int32(m)
+                var lwork32 = lwork
+                var info32 = info
+                sgeqrf_(&m32, &n32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
+                info = info32
+            }
+        }
+    }
     precondition(info == 0, "sgeqrf failed: \(info)")
 
     // Generate Q from QR factors
-    sorgqr_(&Int32(m), &Int32(n), &Int32(n), &aCopy.data, &Int32(m), &tau, &work, &lwork, &info)
+    aCopy.data.withUnsafeMutableBufferPointer { aPtr in
+        tau.withUnsafeMutableBufferPointer { tauPtr in
+            work.withUnsafeMutableBufferPointer { workPtr in
+                var m32 = Int32(m)
+                var n32 = Int32(n)
+                var k32 = Int32(n)
+                var lda = Int32(m)
+                var lwork32 = lwork
+                var info32 = info
+                sorgqr_(&m32, &n32, &k32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
+                info = info32
+            }
+        }
+    }
     precondition(info == 0, "sorgqr failed: \(info)")
 
     return aCopy
@@ -288,10 +327,52 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     var work = [Float](repeating: 0, count: 1)
     var info: Int32 = 0
 
-    sgesdd_(&jobz, &Int32(m), &Int32(n), &aCopy.data, &Int32(m), &s, &u.data, &ldu, &vt.data, &ldvt, &work, &lwork, &iwork, &info)
-    lwork = Int32(work[0])
+    aCopy.data.withUnsafeMutableBufferPointer { aPtr in
+        s.withUnsafeMutableBufferPointer { sPtr in
+            u.data.withUnsafeMutableBufferPointer { uPtr in
+                vt.data.withUnsafeMutableBufferPointer { vtPtr in
+                    work.withUnsafeMutableBufferPointer { workPtr in
+                        iwork.withUnsafeMutableBufferPointer { iworkPtr in
+                            var m32 = Int32(m)
+                            var n32 = Int32(n)
+                            var lda = Int32(m)
+                            var ldu32 = ldu
+                            var ldvt32 = ldvt
+                            var lwork32 = lwork
+                            var info32 = info
+                            sgesdd_(&jobz, &m32, &n32, aPtr.baseAddress!, &lda, sPtr.baseAddress!, uPtr.baseAddress!, &ldu32, vtPtr.baseAddress!, &ldvt32, workPtr.baseAddress!, &lwork32, iworkPtr.baseAddress!, &info32)
+                            lwork = lwork32
+                            info = info32
+                        }
+                    }
+                }
+            }
+        }
+    }
+    precondition(info == 0, "sgesdd query failed: \(info)")
+
     work = [Float](repeating: 0, count: Int(lwork))
-    sgesdd_(&jobz, &Int32(m), &Int32(n), &aCopy.data, &Int32(m), &s, &u.data, &ldu, &vt.data, &ldvt, &work, &lwork, &iwork, &info)
+    aCopy.data.withUnsafeMutableBufferPointer { aPtr in
+        s.withUnsafeMutableBufferPointer { sPtr in
+            u.data.withUnsafeMutableBufferPointer { uPtr in
+                vt.data.withUnsafeMutableBufferPointer { vtPtr in
+                    work.withUnsafeMutableBufferPointer { workPtr in
+                        iwork.withUnsafeMutableBufferPointer { iworkPtr in
+                            var m32 = Int32(m)
+                            var n32 = Int32(n)
+                            var lda = Int32(m)
+                            var ldu32 = ldu
+                            var ldvt32 = ldvt
+                            var lwork32 = lwork
+                            var info32 = info
+                            sgesdd_(&jobz, &m32, &n32, aPtr.baseAddress!, &lda, sPtr.baseAddress!, uPtr.baseAddress!, &ldu32, vtPtr.baseAddress!, &ldvt32, workPtr.baseAddress!, &lwork32, iworkPtr.baseAddress!, &info32)
+                            info = info32
+                        }
+                    }
+                }
+            }
+        }
+    }
     precondition(info == 0, "sgesdd failed: \(info)")
 
     // Truncate to rank r
@@ -325,14 +406,14 @@ public func factorToRank(_ dense: Matrix, rank: Int) -> (A: Matrix, B: Matrix) {
 // MARK: - LAPACK function declarations (Accelerate)
 
 @_silgen_name("sgeqrf_")
-func sgeqrf_(_ m: *Int32, _ n: *Int32, _ a: *Float, _ lda: *Int32,
-             _ tau: *Float, _ work: *Float, _ lwork: *Int32, _ info: *Int32)
+func sgeqrf_(_ m: UnsafeMutablePointer<Int32>, _ n: UnsafeMutablePointer<Int32>, _ a: UnsafeMutablePointer<Float>, _ lda: UnsafeMutablePointer<Int32>,
+             _ tau: UnsafeMutablePointer<Float>, _ work: UnsafeMutablePointer<Float>, _ lwork: UnsafeMutablePointer<Int32>, _ info: UnsafeMutablePointer<Int32>)
 
 @_silgen_name("sorgqr_")
-func sorgqr_(_ m: *Int32, _ n: *Int32, _ k: *Int32, _ a: *Float, _ lda: *Int32,
-             _ tau: *Float, _ work: *Float, _ lwork: *Int32, _ info: *Int32)
+func sorgqr_(_ m: UnsafeMutablePointer<Int32>, _ n: UnsafeMutablePointer<Int32>, _ k: UnsafeMutablePointer<Int32>, _ a: UnsafeMutablePointer<Float>, _ lda: UnsafeMutablePointer<Int32>,
+             _ tau: UnsafeMutablePointer<Float>, _ work: UnsafeMutablePointer<Float>, _ lwork: UnsafeMutablePointer<Int32>, _ info: UnsafeMutablePointer<Int32>)
 
 @_silgen_name("sgesdd_")
-func sgesdd_(_ jobz: *Int8, _ m: *Int32, _ n: *Int32, _ a: *Float, _ lda: *Int32,
-             _ s: *Float, _ u: *Float, _ ldu: *Int32, _ vt: *Float, _ ldvt: *Int32,
-             _ work: *Float, _ lwork: *Int32, _ iwork: *Int32, _ info: *Int32)
+func sgesdd_(_ jobz: UnsafeMutablePointer<Int8>, _ m: UnsafeMutablePointer<Int32>, _ n: UnsafeMutablePointer<Int32>, _ a: UnsafeMutablePointer<Float>, _ lda: UnsafeMutablePointer<Int32>,
+             _ s: UnsafeMutablePointer<Float>, _ u: UnsafeMutablePointer<Float>, _ ldu: UnsafeMutablePointer<Int32>, _ vt: UnsafeMutablePointer<Float>, _ ldvt: UnsafeMutablePointer<Int32>,
+             _ work: UnsafeMutablePointer<Float>, _ lwork: UnsafeMutablePointer<Int32>, _ iwork: UnsafeMutablePointer<Int32>, _ info: UnsafeMutablePointer<Int32>)
