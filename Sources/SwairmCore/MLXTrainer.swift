@@ -240,7 +240,7 @@ public actor MLXTrainer: LocalTraining {
         if model == nil {
             // Load base model from local directory via MLXLMCommon
             let modelDirectory = URL(fileURLWithPath: config.modelPath)
-            let loadedModel: any LanguageModel = try await {
+            let loadedModel: any LanguageModel = try await @Sendable {
                 // Use LLMModelFactory directly rather than the free-function
                 // MLXLMCommon loadModel: the latter resolves a factory through the
                 // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
@@ -688,7 +688,3 @@ extension MLXTrainer {
         return model.parameters()
     }
 }
-
-// MLXTrainer uses LanguageModel which doesn't conform to Sendable.
-// The actor isolation ensures thread safety; we assert Sendable conformance.
-extension MLXTrainer: @unchecked Sendable {}
