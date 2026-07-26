@@ -603,7 +603,7 @@ extension MLXTrainer {
         arrays.append(("step_count", stepCountArray))
 
         // 2. LoRA parameters (flattened)
-        let loraParams = container.parameters.flattened()
+        let loraParams = loraContainer!.parameters.flattened()
         for (name, tensor) in loraParams {
             let flat = tensor.flattened().asType(MLX.DType.float32)
             let floats = flat.asArray(Float.self)
@@ -658,7 +658,7 @@ extension MLXTrainer {
         }
         if !loraParams.isEmpty {
             let params = ModuleParameters.unflattened(loraParams)
-            try model.update(parameters: params, verify: .noUnusedKeys)
+            try model!.update(parameters: params, verify: .noUnusedKeys)
         }
 
         // 3. Restore model parameters (includes optimizer-implicit state)
@@ -671,7 +671,7 @@ extension MLXTrainer {
         }
         if !modelParams.isEmpty {
             let params = ModuleParameters.unflattened(modelParams)
-            try model.update(parameters: params, verify: .noUnusedKeys)
+            try model!.update(parameters: params, verify: .noUnusedKeys)
         }
 
         appendLog("Loaded checkpoint from \(url.lastPathComponent) (step \(stepCount))")
