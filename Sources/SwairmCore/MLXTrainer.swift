@@ -688,3 +688,7 @@ extension MLXTrainer {
         return model.parameters()
     }
 }
+
+// MLXTrainer uses LanguageModel which doesn't conform to Sendable.
+// The actor isolation ensures thread safety; we assert Sendable conformance.
+extension MLXTrainer: @unchecked Sendable {}
