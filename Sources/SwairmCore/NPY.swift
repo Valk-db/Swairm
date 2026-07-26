@@ -60,20 +60,16 @@ public enum Float16Codec {
         out.withUnsafeMutableBytes { ptr in
             let dst = ptr.bindMemory(to: UInt16.self).baseAddress!
             floats.withUnsafeBufferPointer { src in
+                #if os(iOS) || os(tvOS) || os(watchOS)
                 vDSP_vfloat2half(src.baseAddress!, 1, dst, 1, vDSP_Length(floats.count))
+                #else
+                // macOS: scalar fallback
+                for i in 0..<floats.count {
+                    dst[i] = encode(floats[i])
+                }
+                #endif
             }
         }
-        // vDSP produces native-endian; wire format is little-endian
-        #if arch(i386) || arch(x86_64) || arch(arm64)
-        // Apple platforms are little-endian; no byte swap needed
-        #else
-        // Big-endian fallback (not used in practice)
-        for i in 0..<floats.count {
-            let h = encode(floats[i])
-            out[i * 2] = UInt8(h & 0xFF)
-            out[i * 2 + 1] = UInt8(h >> 8)
-        }
-        #endif
         return out
     }
 
@@ -84,7 +80,14 @@ public enum Float16Codec {
         data.withUnsafeBytes { ptr in
             let src = ptr.bindMemory(to: UInt16.self).baseAddress!
             out.withUnsafeMutableBufferPointer { dst in
+                #if os(iOS) || os(tvOS) || os(watchOS)
                 vDSP_vhalf2float(src, 1, dst.baseAddress!, 1, vDSP_Length(count))
+                #else
+                // macOS: scalar fallback
+                for i in 0..<count {
+                    dst[i] = decode(src[i])
+                }
+                #endif
             }
         }
         return out
