@@ -197,7 +197,7 @@ public actor MLXTrainer: LocalTraining {
     public let config: MLXTrainerConfig
 
     // Training state
-    private var model: (any LanguageModel)?
+    private var model: (@unchecked Sendable & AnyObject)?
     private var loraContainer: LoRAContainer?
     private var optimizer: AdamW?
     private var stepCount = 0
@@ -590,7 +590,7 @@ extension MLXTrainer {
     /// Save training checkpoint to an NPZ file.
     /// Contains: step count, LoRA parameters, model parameters, RNG state.
     public func saveCheckpoint(to url: URL) async throws {
-        guard let container = loraContainer, let model = model else {
+        guard loraContainer != nil, model != nil else {
             throw TrainingError.notPrepared
         }
 
@@ -632,7 +632,7 @@ extension MLXTrainer {
     /// Load training checkpoint from an NPZ file.
     /// Restores: step count, LoRA parameters, model parameters, RNG state.
     public func loadCheckpoint(from url: URL) async throws {
-        guard let container = loraContainer, let model = model else {
+        guard loraContainer != nil, model != nil else {
             throw TrainingError.notPrepared
         }
 

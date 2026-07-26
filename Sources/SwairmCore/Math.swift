@@ -37,8 +37,8 @@ public struct Matrix: Equatable, Sendable {
     public func transposed() -> Matrix {
         var out = Matrix(rows: cols, cols: rows)
         // vDSP_mtrans for efficient transpose
-        var rows = vDSP_Length(rows)
-        var cols = vDSP_Length(cols)
+        let rows = vDSP_Length(rows)
+        let cols = vDSP_Length(cols)
         vDSP_mtrans(data, 1, &out.data, 1, cols, rows)
         return out
     }
@@ -177,7 +177,6 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
                 &y.data, Int32(l))
 
     // 3. Power iterations: (D D^T)^q D Ω
-    var _yT = Matrix(rows: l, cols: m)
     let dT = D.transposed()
     var z = Matrix(rows: n, cols: l)
     for _ in 0..<powerIterations {
