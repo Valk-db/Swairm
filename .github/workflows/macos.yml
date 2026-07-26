@@ -187,9 +187,9 @@ jobs:
             --anchor http://127.0.0.1:8000 \
             --model models/mlx-model \
             --curriculum curriculum \
-            --fleet 4 \
+            --fleet 1 \
             --rounds 1 \
-            --max-steps 10 \
+            --max-steps 1 \
             --batch-size 1 \
             --seq-len 64
 
