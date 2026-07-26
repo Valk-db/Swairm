@@ -376,7 +376,7 @@ final class BackgroundTaskScheduler {
                     deviceID: deviceID,
                     deviceIndex: config.deviceIndex,
                     config: MLXLoopConfig(
-                        modelPath: modelPath,
+                        modelPath: resolvedInDocuments(modelPath),
                         targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
                         rankMap: ["": 6],
                         alphaMap: ["": 16.0],
@@ -387,7 +387,7 @@ final class BackgroundTaskScheduler {
                         maxStepsPerRound: config.maxStepsPerRound,
                         batchSize: config.batchSize,
                         sequenceLength: config.sequenceLength,
-                        curriculumDirectory: curriculumDir,
+                        curriculumDirectory: resolvedInDocuments(curriculumDir),
                         seed: 42 + UInt64(config.deviceIndex)
                     )
                 )

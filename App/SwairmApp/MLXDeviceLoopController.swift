@@ -15,7 +15,10 @@ final class MLXDeviceLoopController {
     var intervalSeconds = 25.0
 
     // MLX-specific config
-    var modelPath = "models/Qwen2-0.5B-Instruct-4bit"
+    // Matches CI's local_dir naming (mlx-e2e job) -- copy the same
+    // mlx-community/Qwen3-0.6B-bf16 files into Documents/mlx-model via
+    // Files app to reuse the exact model this default expects.
+    var modelPath = "mlx-model"
     var curriculumDirectory = "curriculum"
     var maxStepsPerRound = 60
     var batchSize = 2
@@ -51,7 +54,7 @@ final class MLXDeviceLoopController {
                 deviceID: deviceID,
                 deviceIndex: deviceIndex,
                 config: MLXLoopConfig(
-                    modelPath: modelPath,
+                    modelPath: resolvedInDocuments(modelPath),
                     targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
                     rankMap: ["": 6],           // uniform rank 6 for all target modules
                     alphaMap: ["": 16.0],       // uniform alpha 16 -> scale = 16/6
@@ -62,7 +65,7 @@ final class MLXDeviceLoopController {
                     maxStepsPerRound: maxStepsPerRound,
                     batchSize: batchSize,
                     sequenceLength: sequenceLength,
-                    curriculumDirectory: curriculumDirectory,
+                    curriculumDirectory: resolvedInDocuments(curriculumDirectory),
                     seed: 42 + UInt64(deviceIndex)
                 )
             )

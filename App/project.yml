@@ -38,6 +38,13 @@ targets:
         NSLocalNetworkUsageDescription: >-
           Swairm connects to your FCS Anchor server on the local network
           to fetch and upload federated training adapters.
+        # Exposes the app's Documents folder as "On My iPhone > Swairm" in
+        # the Files app, so an MLX model dir + curriculum shards can be
+        # copied in without a computer (no in-app downloader for either --
+        # models are too big to bundle/serve ad hoc, and no fetch path is
+        # wired for curriculum on-device yet either).
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         # Background task support for federated learning rounds
         UIBackgroundModes:
           - background-processing
