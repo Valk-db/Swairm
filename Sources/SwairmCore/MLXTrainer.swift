@@ -528,7 +528,7 @@ public actor MLXTrainer: LocalTraining {
         // Pass model as explicit argument to avoid capturing the `var model` reference
         func inner(parameters: ModuleParameters, arrays: [MLXArray]) -> [MLXArray] {
             model.update(parameters: parameters)
-            let logits = model(arrays[0], cache: nil as [MLXLMCommon.KVCache]?)
+            let logits = model(arrays[0], cache: nil as [any MLXLMCommon.KVCache]?)
             let flatLogits = logits.reshaped(-1, logits.shape.last!)
             let flatLabels = arrays[1].reshaped(-1)
             return [crossEntropy(logits: flatLogits, targets: flatLabels, reduction: .mean)]
@@ -658,7 +658,7 @@ extension MLXTrainer {
         for (key, npyArray) in dict where key.hasPrefix("lora_") {
             let paramName = String(key.dropFirst(5)) // remove "lora_"
             let floats = try npyArray.floats()
-            let array = MLXArray(floats, npyArray.shape).asType(.float32)
+            let array = MLXArray(floats, npyArray.shape).asType(MLX.DType.float32)
             loraParams[paramName] = array
         }
         if !loraParams.isEmpty {
@@ -671,7 +671,7 @@ extension MLXTrainer {
         for (key, npyArray) in dict where key.hasPrefix("model_") {
             let paramName = String(key.dropFirst(6)) // remove "model_"
             let floats = try npyArray.floats()
-            let array = MLXArray(floats, npyArray.shape).asType(.float32)
+            let array = MLXArray(floats, npyArray.shape).asType(MLX.DType.float32)
             modelParams[paramName] = array
         }
         if !modelParams.isEmpty {
