@@ -60,14 +60,11 @@ public enum Float16Codec {
         out.withUnsafeMutableBytes { ptr in
             let dst = ptr.bindMemory(to: UInt16.self).baseAddress!
             floats.withUnsafeBufferPointer { src in
-                #if os(iOS) || os(tvOS) || os(watchOS)
-                vDSP_vfloat2half(src.baseAddress!, 1, dst, 1, vDSP_Length(floats.count))
-                #else
-                // macOS: scalar fallback
+                // Scalar fallback works on all platforms; vDSP half-precision functions
+                // are not consistently available across SDK versions.
                 for i in 0..<floats.count {
                     dst[i] = encode(floats[i])
                 }
-                #endif
             }
         }
         return out
@@ -80,14 +77,10 @@ public enum Float16Codec {
         data.withUnsafeBytes { ptr in
             let src = ptr.bindMemory(to: UInt16.self).baseAddress!
             out.withUnsafeMutableBufferPointer { dst in
-                #if os(iOS) || os(tvOS) || os(watchOS)
-                vDSP_vhalf2float(src, 1, dst.baseAddress!, 1, vDSP_Length(count))
-                #else
-                // macOS: scalar fallback
+                // Scalar fallback works on all platforms
                 for i in 0..<count {
                     dst[i] = decode(src[i])
                 }
-                #endif
             }
         }
         return out
