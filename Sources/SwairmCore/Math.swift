@@ -46,22 +46,15 @@ public struct Matrix: Equatable, Sendable {
     public static func * (lhs: Matrix, rhs: Matrix) -> Matrix {
         precondition(lhs.cols == rhs.rows, "matmul dimension mismatch")
         var out = Matrix(rows: lhs.rows, cols: rhs.cols)
-        var m = vDSP_Length(lhs.rows)
-        var n = vDSP_Length(rhs.cols)
-        var k = vDSP_Length(lhs.cols)
         // cblas_sgemm: C = A * B (row-major)
-        // Accelerate expects column-major, so we compute C^T = B^T * A^T
-        // which is equivalent to cblas_sgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, n, m, k, 1, B, n, A, k, 0, C, n)
-        // then transpose result. But simpler: use vDSP_mmul with transposed inputs.
-        // vDSP_mmul expects column-major. We'll use cblas_sgemm directly.
         cblas_sgemm(
             CblasRowMajor, CblasNoTrans, CblasNoTrans,
-            vDSP_Length(lhs.rows), vDSP_Length(rhs.cols), vDSP_Length(lhs.cols),
+            Int32(lhs.rows), Int32(rhs.cols), Int32(lhs.cols),
             1.0,
-            lhs.data, vDSP_Length(lhs.cols),
-            rhs.data, vDSP_Length(rhs.cols),
+            lhs.data, Int32(lhs.cols),
+            rhs.data, Int32(rhs.cols),
             0.0,
-            &out.data, vDSP_Length(rhs.cols)
+            &out.data, Int32(rhs.cols)
         )
         return out
     }
@@ -176,12 +169,12 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
     // 2. Y = D * Ω  (m × l)
     var y = Matrix(rows: m, cols: l)
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                vDSP_Length(m), vDSP_Length(l), vDSP_Length(n),
+                Int32(m), Int32(l), Int32(n),
                 1.0,
-                D.data, vDSP_Length(n),
-                omega.data, vDSP_Length(l),
+                D.data, Int32(n),
+                omega.data, Int32(l),
                 0.0,
-                &y.data, vDSP_Length(l))
+                &y.data, Int32(l))
 
     // 3. Power iterations: (D D^T)^q D Ω
     var yT = Matrix(rows: l, cols: m)
@@ -190,24 +183,24 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
     for _ in 0..<powerIterations {
         // Z = D^T * Y  (n × l)
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    vDSP_Length(n), vDSP_Length(l), vDSP_Length(m),
+                    Int32(n), Int32(l), Int32(m),
                     1.0,
-                    dT.data, vDSP_Length(m),
-                    y.data, vDSP_Length(l),
+                    dT.data, Int32(m),
+                    y.data, Int32(l),
                     0.0,
-                    &z.data, vDSP_Length(l))
+                    &z.data, Int32(l))
 
         // Orthonormalize Z columns (QR via LAPACK geqrf + orgqr)
         z = qrOrthoColumns(z)
 
         // Y = D * Z  (m × l)
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    vDSP_Length(m), vDSP_Length(l), vDSP_Length(n),
+                    Int32(m), Int32(l), Int32(n),
                     1.0,
-                    D.data, vDSP_Length(n),
-                    z.data, vDSP_Length(l),
+                    D.data, Int32(n),
+                    z.data, Int32(l),
                     0.0,
-                    &y.data, vDSP_Length(l))
+                    &y.data, Int32(l))
 
         // Orthonormalize Y columns
         y = qrOrthoColumns(y)
@@ -217,12 +210,12 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
     var yTData = y.transposed()
     var bSmall = Matrix(rows: l, cols: n)
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                vDSP_Length(l), vDSP_Length(n), vDSP_Length(m),
+                Int32(l), Int32(n), Int32(m),
                 1.0,
-                yTData.data, vDSP_Length(m),
-                D.data, vDSP_Length(n),
+                yTData.data, Int32(m),
+                D.data, Int32(n),
                 0.0,
-                &bSmall.data, vDSP_Length(n))
+                &bSmall.data, Int32(n))
 
     // 5. SVD of B (l × n) using LAPACK dgesdd (via Accelerate's SVD)
     // Compute economy SVD: B = U_B Σ V^T, where U_B is l×r, Σ is r, V^T is r×n
@@ -231,12 +224,12 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
     // 6. U = Y * U_B  (m × r)
     var u = Matrix(rows: m, cols: r)
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                vDSP_Length(m), vDSP_Length(r), vDSP_Length(l),
+                Int32(m), Int32(r), Int32(l),
                 1.0,
-                y.data, vDSP_Length(l),
-                uB.data, vDSP_Length(r),
+                y.data, Int32(l),
+                uB.data, Int32(r),
                 0.0,
-                &u.data, vDSP_Length(r))
+                &u.data, Int32(r))
 
     // Vt is already r × n
     return SVDResult(U: u, S: s, Vt: vt)
