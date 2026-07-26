@@ -240,8 +240,8 @@ public func truncatedSVD(_ D: Matrix, rank: Int, oversample: Int = 2,
 func qrOrthoColumns(_ a: Matrix) -> Matrix {
     let m = a.rows
     let n = a.cols
-    // Transpose to column-major for LAPACK: (m × n) row-major → (n × m) col-major
-    var aColMajor = a.transposed()  // now n rows, m cols in row-major = m rows, n cols in col-major
+    // Transpose to column-major for LAPACK: (m × n) row-major → (n × m) row-major = m×n col-major
+    var aColMajor = a.transposed()  // n rows, m cols in row-major = m rows, n cols in col-major
     var tau = [Float](repeating: 0, count: min(m, n))
     var work = [Float](repeating: 0, count: min(m, n))
     var lwork: Int32 = -1
@@ -252,8 +252,8 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
         tau.withUnsafeMutableBufferPointer { tauPtr in
             work.withUnsafeMutableBufferPointer { workPtr in
-                var m32 = Int32(n)  // col-major rows = n
-                var n32 = Int32(m)  // col-major cols = m
+                var m32 = Int32(m)  // col-major rows = m (original rows)
+                var n32 = Int32(n)  // col-major cols = n (original cols)
                 var lda = Int32(m)  // leading dim for col-major = m (original rows)
                 var lwork32 = lwork
                 var info32 = info
@@ -272,8 +272,8 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
         tau.withUnsafeMutableBufferPointer { tauPtr in
             work.withUnsafeMutableBufferPointer { workPtr in
-                var m32 = Int32(n)
-                var n32 = Int32(m)
+                var m32 = Int32(m)
+                var n32 = Int32(n)
                 var lda = Int32(m)  // leading dim for col-major = m (original rows)
                 var lwork32 = lwork
                 var info32 = info
@@ -285,14 +285,14 @@ func qrOrthoColumns(_ a: Matrix) -> Matrix {
     precondition(info == 0, "sgeqrf failed: \(info)")
 
     // Generate Q from QR factors
-    // Q in col-major is m×min(m,n); will be n×min(m,n) in row-major
+    // Q in col-major is m×min(m,n); will be min(m,n)×m in row-major
     aColMajor.data.withUnsafeMutableBufferPointer { aPtr in
         tau.withUnsafeMutableBufferPointer { tauPtr in
             work.withUnsafeMutableBufferPointer { workPtr in
-                var m32 = Int32(n)
-                var n32 = Int32(min(m, n))
+                var m32 = Int32(m)           // col-major rows of Q = m
+                var n32 = Int32(min(m, n))   // col-major cols of Q = min(m,n)
                 var k32 = Int32(min(m, n))
-                var lda = Int32(m)  // leading dim for col-major = m (original rows)
+                var lda = Int32(m)           // leading dim for col-major = m
                 var lwork32 = lwork
                 var info32 = info
                 sorgqr_(&m32, &n32, &k32, aPtr.baseAddress!, &lda, tauPtr.baseAddress!, workPtr.baseAddress!, &lwork32, &info32)
@@ -317,21 +317,20 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     let k = min(m, n)
     let r = min(rank, k)
 
-    // Transpose to column-major for LAPACK: (m × n) row-major → (n × m) col-major
+    // Transpose A to column-major: A (m×n row-major) → A^T (n×m row-major = m×n col-major)
     var aColMajor = a.transposed()  // n rows, m cols in row-major = m rows, n cols in col-major
     var s = [Float](repeating: 0, count: k)
-    // sgesdd on A^T (n×m col-major) returns:
-    // U' = V (n×k col-major = k×n row-major)
-    // V'^T = U^T (k×m col-major = m×k row-major)
-    // We want U = (V'^T)^T = U (m×k) and V^T = (U')^T = V^T (k×n)
-    var uPrimeColMajor = Matrix(rows: n, cols: k)  // receives U' = V (n×k)
-    var vtPrimeColMajor = Matrix(rows: m, cols: k)  // receives V'^T = U^T (m×k)
+    // sgesdd on A^T (m×n col-major matrix):
+    // U_col = V (m×k col-major = k×m row-major)
+    // V_col^T = U^T (k×n col-major = n×k row-major)
+    var uPrimeColMajor = Matrix(rows: k, cols: m)  // receives U_col (m×k col-major)
+    var vtPrimeColMajor = Matrix(rows: n, cols: k)  // receives V_col^T (k×n col-major)
     var superb = [Float](repeating: 0, count: k - 1)
 
     // sgesdd: jobz = 'S' (economy size)
     var jobz: Int8 = 83  // 'S'
-    var ldu = Int32(n)   // leading dim of U' output = m32 = n
-    var ldvt = Int32(k)  // leading dim of V'^T output = min(m32,n32) = k
+    var ldu = Int32(m)   // leading dim of U_col output = m (col-major rows)
+    var ldvt = Int32(k)  // leading dim of V_col^T output = k
     var lwork: Int32 = -1
     var iwork = [Int32](repeating: 0, count: 8 * k)
     var work = [Float](repeating: 0, count: 1)
@@ -343,8 +342,8 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
                 vtPrimeColMajor.data.withUnsafeMutableBufferPointer { vtPtr in
                     work.withUnsafeMutableBufferPointer { workPtr in
                         iwork.withUnsafeMutableBufferPointer { iworkPtr in
-                            var m32 = Int32(n)  // col-major rows = n
-                            var n32 = Int32(m)  // col-major cols = m
+                            var m32 = Int32(m)  // col-major rows = m (original rows)
+                            var n32 = Int32(n)  // col-major cols = n (original cols)
                             var lda = Int32(m)  // leading dim for col-major = m (original rows)
                             var ldu32 = ldu
                             var ldvt32 = ldvt
@@ -371,8 +370,8 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
                 vtPrimeColMajor.data.withUnsafeMutableBufferPointer { vtPtr in
                     work.withUnsafeMutableBufferPointer { workPtr in
                         iwork.withUnsafeMutableBufferPointer { iworkPtr in
-                            var m32 = Int32(n)
-                            var n32 = Int32(m)
+                            var m32 = Int32(m)
+                            var n32 = Int32(n)
                             var lda = Int32(m)
                             var ldu32 = ldu
                             var ldvt32 = ldvt
@@ -388,11 +387,10 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     }
     precondition(info == 0, "sgesdd failed: \(info)")
 
-    // Transpose results back to row-major and swap U/V^T
-    // uPrimeColMajor (n×k in row-major = U' = V) → transpose to k×n = V^T
-    let vtRowMajor = uPrimeColMajor.transposed()
-    // vtPrimeColMajor (m×k in row-major = V'^T = U^T) → transpose to k×m = U^T, then transpose to m×k = U
-    let uRowMajor = vtPrimeColMajor.transposed()
+    // uPrimeColMajor (k×m in row-major = U_col = V'^T = U^T) → transpose to m×k = U
+    let uRowMajor = uPrimeColMajor.transposed()
+    // vtPrimeColMajor (n×k in row-major = V_col^T = U' = V) → transpose to k×n = V^T
+    let vtRowMajor = vtPrimeColMajor.transposed()
 
     // Truncate to rank r
     var uTrunc = Matrix(rows: m, cols: r)
