@@ -325,12 +325,11 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     // V_col^T = U^T (k×n col-major = n×k row-major)
     var uPrimeColMajor = Matrix(rows: k, cols: m)  // receives U_col (m×k col-major)
     var vtPrimeColMajor = Matrix(rows: n, cols: k)  // receives V_col^T (k×n col-major)
-    var superb = [Float](repeating: 0, count: k - 1)
 
     // sgesdd: jobz = 'S' (economy size)
-    var jobz: Int8 = 83  // 'S'
-    var ldu = Int32(m)   // leading dim of U_col output = m (col-major rows)
-    var ldvt = Int32(k)  // leading dim of V_col^T output = k
+    let jobz: Int8 = 83  // 'S'
+    let ldu = Int32(m)   // leading dim of U_col output = m (col-major rows)
+    let ldvt = Int32(k)  // leading dim of V_col^T output = k
     var lwork: Int32 = -1
     var iwork = [Int32](repeating: 0, count: 8 * k)
     var work = [Float](repeating: 0, count: 1)
