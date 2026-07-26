@@ -320,18 +320,18 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     // Transpose to column-major for LAPACK: (m × n) row-major → (n × m) col-major
     var aColMajor = a.transposed()  // n rows, m cols in row-major = m rows, n cols in col-major
     var s = [Float](repeating: 0, count: k)
-    // sgesdd on A^T returns U' = V and V'^T = U^T
-    // We need U = V'^T and V^T = U'^T
-    // U' (col-major): m × k → row-major: k × m
-    // V'^T (col-major): k × n → row-major: n × k
-    var uPrimeColMajor = Matrix(rows: k, cols: m)  // receives V'^T = U^T
-    var vtPrimeColMajor = Matrix(rows: n, cols: k)  // receives U' = V
+    // sgesdd on A^T (n×m col-major) returns:
+    // U' = V (n×k col-major = k×n row-major)
+    // V'^T = U^T (k×m col-major = m×k row-major)
+    // We want U = (V'^T)^T = U (m×k) and V^T = (U')^T = V^T (k×n)
+    var uPrimeColMajor = Matrix(rows: n, cols: k)  // receives U' = V (n×k)
+    var vtPrimeColMajor = Matrix(rows: m, cols: k)  // receives V'^T = U^T (m×k)
     var superb = [Float](repeating: 0, count: k - 1)
 
     // sgesdd: jobz = 'S' (economy size)
     var jobz: Int8 = 83  // 'S'
-    var ldu = Int32(m)
-    var ldvt = Int32(k)
+    var ldu = Int32(n)   // leading dim of U' output = m32 = n
+    var ldvt = Int32(k)  // leading dim of V'^T output = min(m32,n32) = k
     var lwork: Int32 = -1
     var iwork = [Int32](repeating: 0, count: 8 * k)
     var work = [Float](repeating: 0, count: 1)
@@ -389,10 +389,10 @@ func svdEconomy(_ a: Matrix, rank: Int) -> (U: Matrix, S: [Float], Vt: Matrix) {
     precondition(info == 0, "sgesdd failed: \(info)")
 
     // Transpose results back to row-major and swap U/V^T
-    // uPrimeColMajor (k×m in row-major = U'^T) → transpose to m×k = U
-    let uRowMajor = uPrimeColMajor.transposed()
-    // vtPrimeColMajor (n×k in row-major = V') → transpose to k×n = V^T
-    let vtRowMajor = vtPrimeColMajor.transposed()
+    // uPrimeColMajor (n×k in row-major = U' = V) → transpose to k×n = V^T
+    let vtRowMajor = uPrimeColMajor.transposed()
+    // vtPrimeColMajor (m×k in row-major = V'^T = U^T) → transpose to k×m = U^T, then transpose to m×k = U
+    let uRowMajor = vtPrimeColMajor.transposed()
 
     // Truncate to rank r
     var uTrunc = Matrix(rows: m, cols: r)
