@@ -44,6 +44,8 @@ public struct DownloadProgress: Sendable {
 public enum ModelDownloadError: Error, Sendable {
     case curriculumError(CurriculumError)
     case modelDirectoryCreationFailed
+    case shardDownloadFailed(shard: String, underlying: Error)
+    case manifestFetchFailed(underlying: Error)
     case modelFetchFailed(underlying: Error)
     case invalidAnchorResponse(String)
     case writeFailed(underlying: Error)
