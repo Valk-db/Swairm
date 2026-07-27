@@ -269,3 +269,11 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
 extension AnchorClient: @unchecked Sendable {}
 // @unchecked justification: all stored properties (base, session) are `let`
 // and URLSession is itself thread-safe; the class holds no mutable state.
+
+// MARK: - Helpers
+
+private func computeSHA256(_ data: Data) -> String {
+    var hash = [UInt8](repeating: 0, count: 32)
+    data.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash) }
+    return hash.map { String(format: "%02x", $0) }.joined()
+}
