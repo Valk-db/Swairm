@@ -253,8 +253,13 @@ public protocol BaseModelDownloading: Sendable {
 
 public enum BaseModelDownloadError: Error, Sendable {
     case manifestNotFound(String)
+    case manifestFetchFailed(model: String)
     case fileNotFound(String, String)
+    case fileDownloadFailed(file: String, underlying: Error)
     case integrityCheckFailed(expected: String, actual: String)
+    case integrityCheckFailed(file: String, expected: String, actual: String)
     case invalidFileName(String)
+    case directoryCreationFailed
+    case writeFailed(underlying: Error)
     case notImplemented
 }
