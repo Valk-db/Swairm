@@ -143,8 +143,8 @@ async def _prepare_base_model(model_name: str) -> None:
     from pathlib import Path
 
     try:
-        from huggingface_hub import snapshot_download
-        from mlx_lm.convert import convert
+        from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
+        from mlx_lm.convert import convert  # type: ignore[import-not-found]
         MLX_LM_AVAILABLE = True
     except ImportError:
         MLX_LM_AVAILABLE = False

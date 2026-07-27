@@ -21,12 +21,14 @@ import shutil
 from pathlib import Path
 
 try:
-    from huggingface_hub import snapshot_download
-    from mlx_lm.convert import convert
+    from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
+    from mlx_lm.convert import convert  # type: ignore[import-not-found]
     MLX_LM_AVAILABLE = True
 except ImportError:
     MLX_LM_AVAILABLE = False
-    print("Warning: mlx_lm not available, will only copy existing MLX models")
+    snapshot_download = None  # type: ignore[assignment]
+    convert = None  # type: ignore[assignment]
+    print("Warning: mlx_lm/huggingface_hub not available, will only copy existing MLX models")
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -54,6 +56,8 @@ def prepare_model(hf_repo: str, output_dir: Path, anchor_dir: Path = None) -> di
     else:
         # Download from HuggingFace
         print(f"Downloading {hf_repo} from HuggingFace...")
+        if not MLX_LM_AVAILABLE:
+            raise RuntimeError("huggingface_hub not available for downloading models")
         local_path = snapshot_download(repo_id=hf_repo)
         source_dir = Path(local_path)
 
