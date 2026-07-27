@@ -164,6 +164,10 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
         return URL(string: baseText + path)
     }
 
+    private func headerValue(_ name: String, in http: HTTPURLResponse) -> String? {
+        http.allHeaderFields[name] as? String
+    }
+
     private func request(path: String, method: String,
                          body: Data?) async throws -> (Data, HTTPURLResponse) {
         guard let url = makeURL(path) else {
