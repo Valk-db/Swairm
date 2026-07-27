@@ -155,42 +155,6 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
         return destination
     }
 
-    // ------------------------------------------------------------- base model download
-
-    /// Fetch manifest for a base model (list of files with SHA256).
-    public func fetchBaseModelManifest(modelName: String) async throws -> BaseModelManifest {
-        let (data, http) = try await request(path: "/models/base/\(modelName)/manifest", method: "GET", body: nil)
-        guard http.statusCode == 200 else {
-            if http.statusCode == 404 {
-                throw AnchorClientError.unsupported("Base model '\(modelName)' not found on Anchor")
-            }
-            throw AnchorClientError.httpStatus(http.statusCode)
-        }
-        return try JSONDecoder().decode(BaseModelManifest.self, from: data)
-    }
-
-    /// Download a single base model file with SHA256 verification.
-    public func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL, expectedSHA: String) async throws -> URL {
-        // Validate file name to prevent path traversal
-        if fileName.contains("..") || fileName.contains("/") || fileName.contains("\\") {
-            throw AnchorClientError.modelVerificationFailed("Invalid file name: \(fileName)")
-        }
-        let (data, http) = try await request(path: "/models/base/\(modelName)/\(fileName)", method: "GET", body: nil)
-        guard http.statusCode == 200 else {
-            if http.statusCode == 404 {
-                throw AnchorClientError.unsupported("Base model file '\(fileName)' not found for model '\(modelName)'")
-            }
-            throw AnchorClientError.httpStatus(http.statusCode)
-        }
-        // Verify SHA256
-        let actualSHA = computeSHA256(data)
-        if actualSHA != expectedSHA {
-            throw AnchorClientError.modelVerificationFailed("SHA256 mismatch for \(fileName): expected \(expectedSHA), got \(actualSHA)")
-        }
-        try data.write(to: destination, options: .atomic)
-        return destination
-    }
-
     // ------------------------------------------------------------- internals
 
     private func makeURL(_ path: String) -> URL? {
@@ -254,6 +218,7 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
     }
 
     // ------------------------------------------------------------- base model download
+
     /// Fetch manifest for a base model (list of files with SHA256).
     public func fetchBaseModelManifest(modelName: String) async throws -> BaseModelManifest {
         let (data, http) = try await request(path: "/models/base/\(modelName)/manifest", method: "GET", body: nil)
@@ -280,6 +245,10 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
 
     /// Stream a single base model file to disk, validating SHA256 after download.
     public func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL, expectedSHA: String) async throws -> URL {
+        // Validate file name to prevent path traversal
+        if fileName.contains("..") || fileName.contains("/") || fileName.contains("\\") {
+            throw BaseModelError.invalidFileName(fileName)
+        }
         let (data, http) = try await request(path: "/models/base/\(modelName)/\(fileName)", method: "GET", body: nil)
         guard http.statusCode == 200 else {
             if http.statusCode == 404 {
