@@ -103,6 +103,7 @@ QUEUE_PROCESSED = BASE_DIR / "queue" / "processed"
 QUEUE_QUARANTINE = BASE_DIR / "queue" / "quarantine"
 MODELS_DIR = BASE_DIR / "models"
 STATE_PATH = BASE_DIR / "state.json"
+BASE_MODEL_DIR = BASE_DIR / "models" / "base"
 AGG_INTERVAL_S = int(os.environ.get("FCS_AGG_INTERVAL_S", str(30 * 60)))        # worker drain interval (matches sim cadence)
 # Upload size limit (DoS protection) - 50MB default
 MAX_UPLOAD_MB = int(os.environ.get("FCS_MAX_UPLOAD_MB", "50"))
@@ -118,6 +119,9 @@ SKEW_WINDOW_ROUNDS = 336        # trailing rounds examined (~7d at 30min)
 SKEW_MIN_HISTORY = 48           # don't judge before ~1 day of rounds
 SKEW_MIN_FRACTION = 0.20        # both windows need >=20% of upload volume
 SKEW_JACCARD_THRESHOLD = 0.30   # device-set overlap below this = skew
+
+# --- base model serving ---
+BASE_MODEL_DIR = BASE_DIR / "models" / "base"
 
 
 # =============================================================-- Prometheus metrics
@@ -142,6 +146,16 @@ if PROMETHEUS_AVAILABLE:
         "fcs_curriculum_shard_requests_total",
         "Total number of curriculum shard requests",
         ["result", "epoch"]
+    )
+    BASE_MODEL_MANIFEST_REQUESTS = Counter(
+        "fcs_base_model_manifest_requests_total",
+        "Total number of base model manifest requests",
+        ["result", "model"]
+    )
+    BASE_MODEL_FILE_REQUESTS = Counter(
+        "fcs_base_model_file_requests_total",
+        "Total number of base model file requests",
+        ["result", "model"]
     )
     AGGREGATION_ROUNDS = Counter(
         "fcs_aggregation_rounds_total",
@@ -196,7 +210,8 @@ if PROMETHEUS_AVAILABLE:
     )
 else:
     UPLOADS_RECEIVED = ADAPTER_FETCHES = CURRICULUM_MANIFEST_REQUESTS = None
-    CURRICULUM_SHARD_REQUESTS = AGGREGATION_ROUNDS = UPLOADS_QUARANTINED = None
+    CURRICULUM_SHARD_REQUESTS = BASE_MODEL_MANIFEST_REQUESTS = BASE_MODEL_FILE_REQUESTS = None
+    AGGREGATION_ROUNDS = UPLOADS_QUARANTINED = None
     CURRENT_VERSION = CURRENT_EPOCH = PENDING_UPLOADS = ACTIVE_DEVICES = None
     SKEW_DETECTED = AGGREGATION_WALL_CLOCK = AGGREGATED_UPLOADS = None
     UPLOAD_SIZE_BYTES = AGGREGATION_DURATION_SECONDS = None
@@ -218,6 +233,7 @@ HMAC_PROTECTED_PATHS = {
     "/upload",
     "/adapter/latest",
     "/curriculum/",   # prefix match for all curriculum endpoints
+    "/models/base/",  # prefix match for all base model endpoints
 }
 
 def verify_hmac(request: "Request", body: bytes) -> bool:
@@ -238,7 +254,7 @@ def verify_hmac(request: "Request", body: bytes) -> bool:
 
 
 for d in (QUEUE_TEMP, QUEUE_PENDING, QUEUE_PROCESSED, QUEUE_QUARANTINE,
-          MODELS_DIR):
+          MODELS_DIR, BASE_MODEL_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 
@@ -634,6 +650,83 @@ try:
             content=shard_path.read_bytes(),
             media_type="application/octet-stream",
             headers={"X-Shard-Name": shard_name}
+        )
+
+
+    @app.get("/models/base/{model_name}/manifest")
+    def base_model_manifest(model_name: str, request: Request):
+        """Return manifest of files for a base model."""
+        if not verify_hmac(request, b""):
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_MANIFEST_REQUESTS.labels(result="rejected_hmac", model=model_name).inc()
+            return Response(status_code=401, content="Invalid HMAC signature")
+        model_dir = BASE_MODEL_DIR / model_name
+        if not model_dir.exists() or not model_dir.is_dir():
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_MANIFEST_REQUESTS.labels(result="not_found", model=model_name).inc()
+            return Response(status_code=404, content=f"base model {model_name} not found")
+        # Standard MLX model files
+        expected_files = [
+            "config.json",
+            "model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json"
+        ]
+        file_info = []
+        for fname in expected_files:
+            fpath = model_dir / fname
+            if fpath.exists():
+                sha256 = hashlib.sha256(fpath.read_bytes()).hexdigest()
+                file_info.append({"name": fname, "sha256": sha256, "size": fpath.stat().st_size})
+        if not file_info:
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_MANIFEST_REQUESTS.labels(result="not_found", model=model_name).inc()
+            return Response(status_code=404, content=f"no model files found in {model_name}")
+        manifest = {
+            "model_name": model_name,
+            "files": file_info
+        }
+        if PROMETHEUS_AVAILABLE:
+            BASE_MODEL_MANIFEST_REQUESTS.labels(result="ok", model=model_name).inc()
+        return manifest
+
+
+    @app.get("/models/base/{model_name}/{file_name}")
+    def base_model_file(model_name: str, file_name: str, request: Request):
+        """Stream a single base model file."""
+        if not verify_hmac(request, b""):
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_FILE_REQUESTS.labels(result="rejected_hmac", model=model_name).inc()
+            return Response(status_code=401, content="Invalid HMAC signature")
+        # Validate file name to prevent path traversal
+        if ".." in file_name or "/" in file_name or "\\" in file_name:
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_FILE_REQUESTS.labels(result="invalid_name", model=model_name).inc()
+            return Response(status_code=400, content="invalid file name")
+        # Only allow known MLX model files
+        allowed_files = {
+            "config.json",
+            "model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json"
+        }
+        if file_name not in allowed_files:
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_FILE_REQUESTS.labels(result="invalid_name", model=model_name).inc()
+            return Response(status_code=400, content="file not allowed")
+        file_path = BASE_MODEL_DIR / model_name / file_name
+        if not file_path.exists():
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_FILE_REQUESTS.labels(result="not_found", model=model_name).inc()
+            return Response(status_code=404, content="file not found")
+        if PROMETHEUS_AVAILABLE:
+            BASE_MODEL_FILE_REQUESTS.labels(result="ok", model=model_name).inc()
+        return Response(
+            content=file_path.read_bytes(),
+            media_type="application/octet-stream",
+            headers={"X-Model-Name": model_name, "X-File-Name": file_name}
         )
 except ImportError:
     app = None      # fastapi not installed; --selftest still works

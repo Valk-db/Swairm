@@ -36,6 +36,30 @@ public struct FetchedAdapter: Sendable {
     }
 }
 
+/// Manifest for a base MLX model, returned by GET /models/base/{model_name}/manifest
+public struct BaseModelManifest: Codable, Sendable {
+    public let modelName: String
+    public let files: [BaseModelFile]
+
+    public init(modelName: String, files: [BaseModelFile]) {
+        self.modelName = modelName
+        self.files = files
+    }
+}
+
+/// Individual base model file metadata
+public struct BaseModelFile: Codable, Sendable {
+    public let name: String
+    public let sha256: String
+    public let size: Int64
+
+    public init(name: String, sha256: String, size: Int64) {
+        self.name = name
+        self.sha256 = sha256
+        self.size = size
+    }
+}
+
 /// Everything the Anchor needs to ingest one device's contribution.
 /// Packing to npz wire bytes is the transport's job, not the caller's.
 public struct AdapterUploadPayload: Sendable {
@@ -212,5 +236,25 @@ public enum CurriculumError: Error, Sendable {
     case shardNotFound(Int, String)
     case integrityCheckFailed(expected: String, actual: String)
     case invalidShardName(String)
+    case notImplemented
+}
+
+/// Protocol for downloading base MLX models from the Anchor.
+/// Conformers must be Sendable and fully async (no blocking).
+public protocol BaseModelDownloading: Sendable {
+    /// Fetch manifest for a base model.
+    /// Returns list of files with SHA256 hashes.
+    func fetchBaseModelManifest(modelName: String) async throws -> BaseModelManifest
+
+    /// Stream a single base model file to disk. Validates SHA256 after download.
+    /// Returns the local file URL on success.
+    func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL) async throws -> URL
+}
+
+public enum BaseModelDownloadError: Error, Sendable {
+    case manifestNotFound(String)
+    case fileNotFound(String, String)
+    case integrityCheckFailed(expected: String, actual: String)
+    case invalidFileName(String)
     case notImplemented
 }

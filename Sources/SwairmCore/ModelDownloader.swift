@@ -1,15 +1,18 @@
-// ModelDownloader: downloads curriculum shards and model adapters from the Anchor.
+// ModelDownloader: downloads curriculum shards, model adapters, and base models from the Anchor.
 //
 // The FCS Anchor exposes:
 //   GET /curriculum/{epoch}/manifest -> CurriculumManifest (JSON)
 //   GET /curriculum/{epoch}/{shard}  -> NPZ bytes + X-Shard-SHA256 header
 //   GET /adapter/latest              -> NPZ adapter bytes + X-Adapter-Version header
+//   GET /models/base/{model}/manifest -> BaseModelManifest (JSON)
+//   GET /models/base/{model}/{file}  -> model file bytes
 //
-// This class uses AnchorClient (which implements CurriculumDownloading) to fetch
+// This class uses AnchorClient (which implements CurriculumDownloading, BaseModelDownloading) to fetch
 // and save files to the app's Documents directory where MLXDeviceLoop expects them.
 //
 // Curriculum shards -> Documents/curriculum/epoch_{epoch}/shard_XXXXX.npz
 // Model adapter     -> Documents/mlx-model/ (NPZ format for MLXTrainer.prepare)
+// Base model        -> Documents/mlx-model/ (MLX model files: config.json, model.safetensors, tokenizer.*)
 //
 // Progress is reported via an AsyncStream for UI updates.
 
@@ -50,6 +53,15 @@ public enum ModelDownloadError: Error, Sendable {
     case invalidAnchorResponse(String)
     case writeFailed(underlying: Error)
     case notImplemented
+}
+
+/// Errors specific to base model download.
+public enum BaseModelDownloadError: Error, Sendable {
+    case manifestFetchFailed(model: String
+    case fileDownloadFailed(file: String, underlying: Error)
+    case integrityCheckFailed(file: String, expected: String, actual: String)
+    case directoryCreationFailed
+    case writeFailed(underlying: Error)
 }
 
 /// Downloads curriculum shards and model adapters from the Anchor.
@@ -208,6 +220,94 @@ public actor ModelDownloader {
 
         progress?(DownloadProgress(phase: .complete, current: 1, total: 1,
                                    message: "Model adapter v\(fetched.version) downloaded to \(modelURL.lastPathComponent)"))
+        return modelDir
+    }
+
+    /// Download a base MLX model from the Anchor.
+    ///
+    /// The model is saved to Documents/mlx-model/ with all required files:
+    /// config.json, model.safetensors, tokenizer.json, tokenizer_config.json, special_tokens_map.json
+    ///
+    /// - Parameters:
+    ///   - modelName: Name of the base model on the Anchor (e.g., "Qwen3-0.6B-bf16")
+    ///   - anchor: AnchorClient instance
+    ///   - progress: Optional callback for progress updates
+    /// - Returns: URL of the downloaded model directory
+    public func downloadBaseModel(
+        modelName: String,
+        anchor: AnchorClient,
+        progress: ((DownloadProgress) -> Void)? = nil
+    ) async throws -> URL {
+        progress?(DownloadProgress(phase: .fetchingManifest, current: 0, total: 1,
+                                   message: "Fetching base model manifest for \(modelName)..."))
+
+        // Fetch manifest
+        let manifest: BaseModelManifest
+        do {
+            manifest = try await anchor.fetchBaseModelManifest(modelName: modelName)
+        } catch {
+            progress?(DownloadProgress(phase: .error, current: 0, total: 1,
+                                       message: "Failed to fetch base model manifest: \(error)"))
+            throw BaseModelDownloadError.manifestFetchFailed(model: modelName)
+        }
+
+        // Create model directory
+        let modelDir = documentsURL.appendingPathComponent("mlx-model")
+        do {
+            try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        } catch {
+            progress?(DownloadProgress(phase: .error, current: 0, total: 1,
+                                       message: "Failed to create model directory: \(error)"))
+            throw BaseModelDownloadError.directoryCreationFailed
+        }
+
+        // Download each file
+        progress?(DownloadProgress(phase: .downloadingModel, current: 0, total: manifest.files.count,
+                                   message: "Downloading \(manifest.files.count) file(s)..."))
+
+        for (index, fileInfo) in manifest.files.enumerated() {
+            let destURL = modelDir.appendingPathComponent(fileInfo.name)
+
+            // Skip if already exists and matches SHA256
+            if FileManager.default.fileExists(atPath: destURL.path) {
+                do {
+                    let existingData = try Data(contentsOf: destURL)
+                    let existingSHA = computeSHA256(existingData)
+                    if existingSHA == fileInfo.sha256 {
+                        progress?(DownloadProgress(phase: .downloadingModel,
+                                                   current: index + 1, total: manifest.files.count,
+                                                   message: "File \(fileInfo.name) already present (verified)"))
+                        continue
+                    }
+                } catch {
+                    // If we can't read/verify, re-download
+                }
+            }
+
+            do {
+                progress?(DownloadProgress(phase: .downloadingModel,
+                                           current: index, total: manifest.files.count,
+                                           message: "Downloading \(fileInfo.name) (\(index + 1)/\(manifest.files.count))..."))
+                _ = try await anchor.downloadBaseModelFile(
+                    modelName: modelName,
+                    fileName: fileInfo.name,
+                    to: destURL,
+                    expectedSHA: fileInfo.sha256
+                )
+                progress?(DownloadProgress(phase: .downloadingModel,
+                                           current: index + 1, total: manifest.files.count,
+                                           message: "Downloaded \(fileInfo.name) (\(index + 1)/\(manifest.files.count))"))
+            } catch {
+                progress?(DownloadProgress(phase: .error,
+                                           current: index + 1, total: manifest.files.count,
+                                           message: "Failed to download \(fileInfo.name): \(error)"))
+                throw BaseModelDownloadError.fileDownloadFailed(file: fileInfo.name, underlying: error)
+            }
+        }
+
+        progress?(DownloadProgress(phase: .complete, current: manifest.files.count,
+                                   total: manifest.files.count,
+                                   message: "Base model \(modelName) ready at \(modelDir.lastPathComponent)"))
         return modelDir
     }
 

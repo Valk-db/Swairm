@@ -75,6 +75,19 @@ struct ContentView: View {
                             .disabled(isRunning)
                     }
 
+                    Section("Base Model") {
+                        TextField("Base model name", text: $mlxController.baseModelName)
+                            .disabled(isRunning || mlxController.isDownloading)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        Button("Download Base Model") {
+                            mlxController.downloadBaseModel()
+                        }
+                        .disabled(isRunning || mlxController.isDownloading)
+                        .fontWeight(.semibold)
+                    }
+
                     Section("Downloads") {
                         Stepper("Curriculum epoch: \(mlxController.curriculumEpoch)",
                                 value: $mlxController.curriculumEpoch, in: 0...999)

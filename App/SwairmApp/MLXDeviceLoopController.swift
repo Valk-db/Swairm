@@ -28,6 +28,9 @@ final class MLXDeviceLoopController {
     var sequenceLength = 128
     var learningRate: Float = 1e-4
 
+    // Base model to download from Anchor (e.g., "Qwen3-0.6B-bf16")
+    var baseModelName = "Qwen3-0.6B-bf16"
+
     // Curriculum epoch to download
     var curriculumEpoch = 0
 
@@ -197,6 +200,43 @@ final class MLXDeviceLoopController {
         downloadTask = nil
         isDownloading = false
         append("Download cancelled")
+    }
+
+    /// Download a base MLX model from the Anchor.
+    func downloadBaseModel() {
+        guard !isDownloading else { return }
+        guard let url = URL(string: anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+            return
+        }
+
+        let anchor = AnchorClient(base: url)
+        let modelName = baseModelName
+
+        isDownloading = true
+        append("Downloading base model \(modelName)...")
+
+        downloadTask = Task { [weak self] in
+            defer { self?.isDownloading = false }
+
+            do {
+                _ = try await self?.modelDownloader.downloadBaseModel(
+                    modelName: modelName,
+                    anchor: anchor
+                ) { progress in
+                    Task { @MainActor in
+                        self?.append(progress.message)
+                    }
+                }
+                await MainActor.run {
+                    self?.append("Base model \(modelName) downloaded successfully")
+                }
+            } catch {
+                await MainActor.run {
+                    self?.append("Base model download failed: \(error)", isError: true)
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------ private

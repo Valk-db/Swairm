@@ -26,6 +26,23 @@ public struct AnchorStatus: Codable, Sendable {
     public let pending: Int
 }
 
+/// Base model manifest returned by Anchor
+public struct BaseModelManifest: Codable, Sendable {
+    public let model_name: String
+    public let files: [BaseModelFileInfo]
+    public let total_size: Int?
+
+    public var totalSize: Int {
+        total_size ?? files.reduce(0) { $0 + $1.size }
+    }
+}
+
+public struct BaseModelFileInfo: Codable, Sendable {
+    public let name: String
+    public let sha256: String
+    public let size: Int
+}
+
 public enum AnchorClientError: Error {
     case invalidURL(String)
     case transport(Error)
@@ -37,9 +54,11 @@ public enum AnchorClientError: Error {
     case hmacRequired
     /// HMAC signature verification failed.
     case hmacInvalid
+    /// Base model file verification failed.
+    case modelVerificationFailed(String)
 }
 
-public final class AnchorClient: AnchorConnecting, CurriculumDownloading {
+public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseModelDownloading {
     public let base: URL
     private let session: URLSession
     private let hmacSecret: Data?
@@ -50,7 +69,8 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading {
         self.base = base
         self.hmacSecret = hmacSecret
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 15
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 300  // 5 min for large model downloads
         self.session = URLSession(configuration: cfg)
     }
 
@@ -135,6 +155,42 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading {
         return destination
     }
 
+    // ------------------------------------------------------------- base model download
+
+    /// Fetch manifest for a base model (list of files with SHA256).
+    public func fetchBaseModelManifest(modelName: String) async throws -> BaseModelManifest {
+        let (data, http) = try await request(path: "/models/base/\(modelName)/manifest", method: "GET", body: nil)
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                throw AnchorClientError.unsupported("Base model '\(modelName)' not found on Anchor")
+            }
+            throw AnchorClientError.httpStatus(http.statusCode)
+        }
+        return try JSONDecoder().decode(BaseModelManifest.self, from: data)
+    }
+
+    /// Download a single base model file with SHA256 verification.
+    public func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL, expectedSHA: String) async throws -> URL {
+        // Validate file name to prevent path traversal
+        if fileName.contains("..") || fileName.contains("/") || fileName.contains("\\") {
+            throw AnchorClientError.modelVerificationFailed("Invalid file name: \(fileName)")
+        }
+        let (data, http) = try await request(path: "/models/base/\(modelName)/\(fileName)", method: "GET", body: nil)
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                throw AnchorClientError.unsupported("Base model file '\(fileName)' not found for model '\(modelName)'")
+            }
+            throw AnchorClientError.httpStatus(http.statusCode)
+        }
+        // Verify SHA256
+        let actualSHA = computeSHA256(data)
+        if actualSHA != expectedSHA {
+            throw AnchorClientError.modelVerificationFailed("SHA256 mismatch for \(fileName): expected \(expectedSHA), got \(actualSHA)")
+        }
+        try data.write(to: destination, options: .atomic)
+        return destination
+    }
+
     // ------------------------------------------------------------- internals
 
     private func makeURL(_ path: String) -> URL? {
@@ -197,21 +253,48 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading {
         }
     }
 
-    private func headerValue(_ name: String, in resp: HTTPURLResponse) -> String? {
-        for (key, value) in resp.allHeaderFields {
-            if String(describing: key).lowercased() == name.lowercased() {
-                return String(describing: value)
+    // ------------------------------------------------------------- base model download
+    /// Fetch manifest for a base model (list of files with SHA256).
+    public func fetchBaseModelManifest(modelName: String) async throws -> BaseModelManifest {
+        let (data, http) = try await request(path: "/models/base/\(modelName)/manifest", method: "GET", body: nil)
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                throw BaseModelError.manifestNotFound(modelName)
             }
+            throw AnchorClientError.httpStatus(http.statusCode)
         }
-        return nil
+        // Decode server manifest and map to our BaseModelManifest
+        struct ServerManifest: Codable {
+            let model_name: String
+            let files: [ServerFileInfo]
+        }
+        struct ServerFileInfo: Codable {
+            let name: String
+            let sha256: String
+            let size: Int
+        }
+        let serverManifest = try JSONDecoder().decode(ServerManifest.self, from: data)
+        let files = serverManifest.files.map { BaseModelFile(name: $0.name, sha256: $0.sha256, size: Int64($0.size)) }
+        return BaseModelManifest(modelName: serverManifest.model_name, files: files)
     }
 
-    private func computeSHA256(_ data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: 32)
-        data.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash) }
-        return hash.map { String(format: "%02x", $0) }.joined()
+    /// Stream a single base model file to disk, validating SHA256 after download.
+    public func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL, expectedSHA: String) async throws -> URL {
+        let (data, http) = try await request(path: "/models/base/\(modelName)/\(fileName)", method: "GET", body: nil)
+        guard http.statusCode == 200 else {
+            if http.statusCode == 404 {
+                throw BaseModelError.fileNotFound(modelName, fileName)
+            }
+            throw AnchorClientError.httpStatus(http.statusCode)
+        }
+        // Validate SHA256
+        let actualSHA = computeSHA256(data)
+        if actualSHA != expectedSHA {
+            throw BaseModelError.integrityCheckFailed(expected: expectedSHA, actual: actualSHA)
+        }
+        try data.write(to: destination, options: .atomic)
+        return destination
     }
-}
 
 extension AnchorClient: @unchecked Sendable {}
 // @unchecked justification: all stored properties (base, session) are `let`
