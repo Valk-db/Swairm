@@ -57,7 +57,9 @@ import uuid
 import asyncio
 import hmac
 import hashlib
+import subprocess
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -122,6 +124,79 @@ SKEW_JACCARD_THRESHOLD = 0.30   # device-set overlap below this = skew
 
 # --- base model serving ---
 BASE_MODEL_DIR = BASE_DIR / "models" / "base"
+
+# Cache for in-progress model preparations to avoid duplicate downloads
+_preparing_models: dict[str, asyncio.Task] = {}
+_preparing_lock = asyncio.Lock()
+
+
+async def _prepare_base_model(model_name: str) -> None:
+    """
+    Download and prepare a base MLX model from HuggingFace.
+
+    Downloads the mlx-community/{model_name} model, converts to MLX format if needed,
+    and saves to BASE_MODEL_DIR/{model_name}/.
+    """
+    import hashlib
+    import json
+    import shutil
+    from pathlib import Path
+
+    try:
+        from huggingface_hub import snapshot_download
+        from mlx_lm.convert import convert
+        MLX_LM_AVAILABLE = True
+    except ImportError:
+        MLX_LM_AVAILABLE = False
+        print(f"[base_model] Warning: mlx_lm not available, cannot convert {model_name}")
+        raise RuntimeError("mlx_lm not available for model conversion")
+
+    model_dir = BASE_MODEL_DIR / model_name
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    hf_repo = f"mlx-community/{model_name}"
+    print(f"[base_model] Downloading {hf_repo} from HuggingFace...")
+
+    try:
+        local_path = snapshot_download(repo_id=hf_repo)
+        source_dir = Path(local_path)
+
+        if MLX_LM_AVAILABLE:
+            print(f"[base_model] Converting {model_name} to MLX format...")
+            convert(str(source_dir), str(model_dir))
+        else:
+            shutil.copytree(source_dir, model_dir, dirs_exist_ok=True)
+
+        # Generate manifest
+        expected_files = [
+            "config.json",
+            "model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json"
+        ]
+
+        manifest = {"model_name": model_name, "files": []}
+        for fname in expected_files:
+            fpath = model_dir / fname
+            if fpath.exists():
+                sha256 = hashlib.sha256(fpath.read_bytes()).hexdigest()
+                size = fpath.stat().st_size
+                manifest["files"].append({"name": fname, "sha256": sha256, "size": size})
+                print(f"[base_model]   {fname}: sha256={sha256[:16]}... size={size:,} bytes")
+            else:
+                print(f"[base_model]   WARNING: {fname} not found in {model_dir}")
+
+        manifest_path = model_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        print(f"[base_model] Model {model_name} ready at {model_dir}")
+        print(f"[base_model] Manifest saved to {manifest_path}")
+
+    except Exception as e:
+        # Clean up partial download on failure
+        if model_dir.exists():
+            shutil.rmtree(model_dir, ignore_errors=True)
+        raise
 
 
 # =============================================================-- Prometheus metrics
@@ -654,17 +729,42 @@ try:
 
 
     @app.get("/models/base/{model_name}/manifest")
-    def base_model_manifest(model_name: str, request: Request):
-        """Return manifest of files for a base model."""
+    async def base_model_manifest(model_name: str, request: Request):
+        """Return manifest of files for a base model. Auto-prepares model if missing."""
         if not verify_hmac(request, b""):
             if PROMETHEUS_AVAILABLE:
                 BASE_MODEL_MANIFEST_REQUESTS.labels(result="rejected_hmac", model=model_name).inc()
             return Response(status_code=401, content="Invalid HMAC signature")
+
         model_dir = BASE_MODEL_DIR / model_name
+
+        # If model doesn't exist, trigger async preparation (non-blocking)
         if not model_dir.exists() or not model_dir.is_dir():
+            # Check if already being prepared
+            task = _preparing_models.get(model_name)
+            if task and not task.done():
+                if PROMETHEUS_AVAILABLE:
+                    BASE_MODEL_MANIFEST_REQUESTS.labels(result="preparing", model=model_name).inc()
+                return Response(status_code=202, content=f"Model {model_name} is being prepared, try again shortly")
+
+            # Start preparation in background
+            async def prepare_model():
+                try:
+                    await _prepare_base_model(model_name)
+                except Exception as e:
+                    print(f"[base_model] Failed to prepare {model_name}: {e}")
+                finally:
+                    async with _preparing_lock:
+                        _preparing_models.pop(model_name, None)
+
+            async with _preparing_lock:
+                task = asyncio.create_task(prepare_model())
+                _preparing_models[model_name] = task
+
             if PROMETHEUS_AVAILABLE:
-                BASE_MODEL_MANIFEST_REQUESTS.labels(result="not_found", model=model_name).inc()
-            return Response(status_code=404, content=f"base model {model_name} not found")
+                BASE_MODEL_MANIFEST_REQUESTS.labels(result="preparing", model=model_name).inc()
+            return Response(status_code=202, content=f"Started preparing {model_name}, check back in a moment")
+
         # Standard MLX model files
         expected_files = [
             "config.json",
