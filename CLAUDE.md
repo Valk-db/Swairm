@@ -75,6 +75,12 @@ All fixes verified by green build-test CI.
   real hardware; this is the same failure class as the earlier Sideloadly
   thermal/hotspot issue. See "Open items" in DECISIONS.md.
 
+**P1 tasks completed (2026-07-27):**
+- TLS Certificate Manager (cert_manager.py): CertManager class with self-signed (dev), Let's Encrypt ACME (production), and manual cert modes; auto-renewal background task; integrated into FastAPI lifespan in main.py
+- Base model auto-download pipeline: Anchor now auto-downloads mlx-community models from HuggingFace on first request (GET /models/base/{model_name}/manifest returns 202 while preparing), converts via mlx_lm.convert, serves manifest + files with SHA256
+- requirements.txt: All Python dependencies for Anchor server (fastapi, uvicorn, prometheus-client, acme, josepy, cryptography, mlx-lm, huggingface-hub, torch, scikit-learn)
+- Type fixes: All pyright errors resolved in main.py, cert_manager.py, tools/prepare_base_model.py
+
 ## Ground rules
 - No local Mac. Never claim something compiles or is fixed without a
   green CI run to point to.

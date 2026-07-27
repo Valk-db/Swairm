@@ -143,6 +143,31 @@ Fixed remaining build warnings and LAPACK correctness issues across the Swift co
 
 All four CI jobs (build-test, integration, sideload-ipa, mlx-e2e) green as of HEAD.
 
+## D16. TLS Certificate Manager with ACME/Let's Encrypt + Prometheus metrics fix (2026-07-27)
+**cert_manager.py (new):** Full TLS certificate lifecycle for Anchor server:
+- Three modes: self-signed (dev default), Let's Encrypt via ACME HTTP-01 (production, requires domain + port 80/443), pre-existing cert files (manual)
+- `CertManager` class with `ensure_certificate()` priority: Let's Encrypt (if domain+email+ACME libs) → self-signed fallback
+- Auto-renewal background task (12h interval, renews when <7 days validity)
+- `create_cert_manager_from_env()` factory reading `FCS_TLS_DOMAIN`, `FCS_TLS_EMAIL`, `FCS_TLS_STAGING`, `FCS_TLS_AUTO_RENEW`
+- Optional ACME dependencies (`acme`, `josepy`, `cryptography`) with type stubs for when not installed
+
+**main.py integration:**
+- FastAPI lifespan handler initializes `CertManager` from env, calls `ensure_certificate()`, starts auto-renewal
+- `/health` endpoint includes TLS status (`tls_enabled`, `domain`, `cert_path`)
+- Startup logs security posture: HMAC auth status (enabled/disabled) + TLS status (managed by app vs external proxy vs plaintext)
+- **Security note:** HMAC (D12) provides request authenticity/integrity only — NOT transport encryption. TLS is separate concern.
+
+**Prometheus metrics fix (main.py):**
+- Replaced `None` assignments with `_NoopMetric` dummy class implementing `.labels()`, `.inc()`, `.set()`, `.observe()` as no-ops
+- Eliminates `NoneType` attribute errors when `prometheus_client` not installed
+- All 18 metrics (7 counters, 8 gauges, 3 histograms) now safe to call unconditionally
+- `/metrics` endpoint returns 503 if `prometheus_client` unavailable, else `text/plain; version=0.0.4`
+
+**Type fixes (pyright/pylance):**
+- `cert_manager.py`: Added type stubs (`None  # type: ignore`) for all optional ACME/cryptography imports
+- `main.py`: Added `dict[str, np.ndarray]` annotation to `pack_upload()`, `# type: ignore[arg-type]` on `np.savez_compressed`, `# type: ignore[union-attr]` on `generate_latest()`
+- `tools/prepare_base_model.py`: Fixed `Optional[Path]` type annotation, wrapper functions with `# type: ignore[union-attr, return-value]` for conditional imports
+
 ## Open items (deliberately not decided)
 - `detect_skew()` thresholds (`SKEW_*` in main.py) -- still untuned against
   real fleet participation. The mlx-e2e CI job runs 1 device / 1 round
