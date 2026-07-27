@@ -207,94 +207,101 @@ async def _prepare_base_model(model_name: str) -> None:
 # =============================================================-- Prometheus metrics
 if PROMETHEUS_AVAILABLE:
     # Counters
-    UPLOADS_RECEIVED = Counter(
+    UPLOADS_RECEIVED = Counter(  # type: ignore[assignment]
         "fcs_uploads_received_total",
         "Total number of adapter uploads received",
         ["result"]  # "queued", "rejected_hmac", "rejected_size", "error"
     )
-    ADAPTER_FETCHES = Counter(
+    ADAPTER_FETCHES = Counter(  # type: ignore[assignment]
         "fcs_adapter_fetches_total",
         "Total number of adapter fetches from /adapter/latest",
         ["result"]  # "ok", "not_found", "rejected_hmac", "error"
     )
-    CURRICULUM_MANIFEST_REQUESTS = Counter(
+    CURRICULUM_MANIFEST_REQUESTS = Counter(  # type: ignore[assignment]
         "fcs_curriculum_manifest_requests_total",
         "Total number of curriculum manifest requests",
         ["result", "epoch"]
     )
-    CURRICULUM_SHARD_REQUESTS = Counter(
+    CURRICULUM_SHARD_REQUESTS = Counter(  # type: ignore[assignment]
         "fcs_curriculum_shard_requests_total",
         "Total number of curriculum shard requests",
         ["result", "epoch"]
     )
-    BASE_MODEL_MANIFEST_REQUESTS = Counter(
+    BASE_MODEL_MANIFEST_REQUESTS = Counter(  # type: ignore[assignment]
         "fcs_base_model_manifest_requests_total",
         "Total number of base model manifest requests",
         ["result", "model"]
     )
-    BASE_MODEL_FILE_REQUESTS = Counter(
+    BASE_MODEL_FILE_REQUESTS = Counter(  # type: ignore[assignment]
         "fcs_base_model_file_requests_total",
         "Total number of base model file requests",
         ["result", "model"]
     )
-    AGGREGATION_ROUNDS = Counter(
+    AGGREGATION_ROUNDS = Counter(  # type: ignore[assignment]
         "fcs_aggregation_rounds_total",
         "Total number of aggregation rounds completed",
         ["result"]  # "ok", "no_uploads", "error"
     )
-    UPLOADS_QUARANTINED = Counter(
+    UPLOADS_QUARANTINED = Counter(  # type: ignore[assignment]
         "fcs_uploads_quarantined_total",
         "Total number of uploads quarantined during aggregation"
     )
 
     # Gauges
-    CURRENT_VERSION = Gauge(
+    CURRENT_VERSION = Gauge(  # type: ignore[assignment]
         "fcs_current_version",
         "Current global adapter version number"
     )
-    CURRENT_EPOCH = Gauge(
+    CURRENT_EPOCH = Gauge(  # type: ignore[assignment]
         "fcs_current_epoch",
         "Current curriculum epoch number"
     )
-    PENDING_UPLOADS = Gauge(
+    PENDING_UPLOADS = Gauge(  # type: ignore[assignment]
         "fcs_pending_uploads",
         "Number of uploads in queue/pending"
     )
-    ACTIVE_DEVICES = Gauge(
+    ACTIVE_DEVICES = Gauge(  # type: ignore[assignment]
         "fcs_active_devices",
         "Number of distinct devices that uploaded in the last round"
     )
-    SKEW_DETECTED = Gauge(
+    SKEW_DETECTED = Gauge(  # type: ignore[assignment]
         "fcs_skew_detected",
         "Whether demographic skew was detected in the last round (1=yes, 0=no)"
     )
-    AGGREGATION_WALL_CLOCK = Gauge(
+    AGGREGATION_WALL_CLOCK = Gauge(  # type: ignore[assignment]
         "fcs_aggregation_wall_clock_seconds",
         "Wall-clock time of the last aggregation round in seconds"
     )
-    AGGREGATED_UPLOADS = Gauge(
+    AGGREGATED_UPLOADS = Gauge(  # type: ignore[assignment]
         "fcs_aggregated_uploads_last_round",
         "Number of uploads aggregated in the last round"
     )
 
     # Histograms
-    UPLOAD_SIZE_BYTES = Histogram(
+    UPLOAD_SIZE_BYTES = Histogram(  # type: ignore[assignment]
         "fcs_upload_size_bytes",
         "Size of upload payloads in bytes",
         buckets=[1024, 10240, 102400, 1048576, 10485760, 52428800]
     )
-    AGGREGATION_DURATION_SECONDS = Histogram(
+    AGGREGATION_DURATION_SECONDS = Histogram(  # type: ignore[assignment]
         "fcs_aggregation_duration_seconds",
         "Time spent in aggregation round (drain_once)",
         buckets=[1, 5, 10, 30, 60, 120, 300]
     )
 else:
-    UPLOADS_RECEIVED = ADAPTER_FETCHES = CURRICULUM_MANIFEST_REQUESTS = None
-    CURRICULUM_SHARD_REQUESTS = BASE_MODEL_MANIFEST_REQUESTS = BASE_MODEL_FILE_REQUESTS = None
-    AGGREGATION_ROUNDS = UPLOADS_QUARANTINED = None
-    CURRENT_VERSION = CURRENT_EPOCH = PENDING_UPLOADS = ACTIVE_DEVICES = None
-    SKEW_DETECTED = AGGREGATION_WALL_CLOCK = AGGREGATED_UPLOADS = None
-    UPLOAD_SIZE_BYTES = AGGREGATION_DURATION_SECONDS = None
+    # Use a dummy class that has all the methods but does nothing
+    class _NoopMetric:
+        def labels(self, *args, **kwargs): return self
+        def inc(self, *args, **kwargs): pass
+        def set(self, *args, **kwargs): pass
+        def observe(self, *args, **kwargs): pass
+    _noop = _NoopMetric()
+    UPLOADS_RECEIVED = ADAPTER_FETCHES = CURRICULUM_MANIFEST_REQUESTS = _noop  # type: ignore[assignment]
+    CURRICULUM_SHARD_REQUESTS = BASE_MODEL_MANIFEST_REQUESTS = BASE_MODEL_FILE_REQUESTS = _noop  # type: ignore[assignment]
+    AGGREGATION_ROUNDS = UPLOADS_QUARANTINED = _noop  # type: ignore[assignment]
+    CURRENT_VERSION = CURRENT_EPOCH = PENDING_UPLOADS = ACTIVE_DEVICES = _noop  # type: ignore[assignment]
+    SKEW_DETECTED = AGGREGATION_WALL_CLOCK = AGGREGATED_UPLOADS = _noop  # type: ignore[assignment]
+    UPLOAD_SIZE_BYTES = AGGREGATION_DURATION_SECONDS = _noop  # type: ignore[assignment]
 
 
 def _is_night(hour):
@@ -354,7 +361,7 @@ def save_state(state):
 
 # ------------------------------------------------------------------ payloads
 def pack_upload(device_id, fetch_version, curriculum_epoch, modules) -> bytes:
-    arrays = {"__meta__": np.frombuffer(json.dumps({
+    arrays: dict[str, np.ndarray] = {"__meta__": np.frombuffer(json.dumps({
         "device_id": device_id, "fetch_version": fetch_version,
         "curriculum_epoch": curriculum_epoch}).encode(), dtype=np.uint8)}
     for name, mod in modules.items():
@@ -362,7 +369,7 @@ def pack_upload(device_id, fetch_version, curriculum_epoch, modules) -> bytes:
         arrays[f"{name}::B"] = np.asarray(mod["B"], dtype=np.float16)
         arrays[f"{name}::m"] = np.asarray(mod["m"], dtype=np.float16)
     buf = io.BytesIO()
-    np.savez_compressed(buf, **arrays)
+    np.savez_compressed(buf, **arrays)  # type: ignore[arg-type]
     return buf.getvalue()
 
 
@@ -646,7 +653,9 @@ try:
             CURRENT_EPOCH.set(state["curriculum_epoch"])
         if PENDING_UPLOADS:
             PENDING_UPLOADS.set(len(list(QUEUE_PENDING.glob("*.npz"))))
-        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+        if PROMETHEUS_AVAILABLE:
+            return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)  # type: ignore[union-attr]
+        return Response(content=b"# Prometheus not available", media_type="text/plain")
 
     @app.post("/upload")
     async def upload(request: Request):

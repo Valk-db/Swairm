@@ -9,7 +9,7 @@ import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 import subprocess
 import tempfile
 
@@ -20,14 +20,25 @@ try:
     import josepy as jose
     from acme import client, messages, challenges, crypto_util
     from acme.client import ClientV2
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
     ACME_AVAILABLE = True
 except ImportError:
     ACME_AVAILABLE = False
-    ClientV2 = None
-    messages = None
-    challenges = None
-    crypto_util = None
-    jose = None
+    # Type stubs for when ACME is not available
+    jose = None  # type: ignore
+    client = None  # type: ignore
+    messages = None  # type: ignore
+    challenges = None  # type: ignore
+    crypto_util = None  # type: ignore
+    ClientV2 = None  # type: ignore
+    x509 = None  # type: ignore
+    NameOID = None  # type: ignore
+    hashes = None  # type: ignore
+    serialization = None  # type: ignore
+    rsa = None  # type: ignore
 
 
 class CertManager:
@@ -67,7 +78,8 @@ class CertManager:
         if not self.cert_path.exists() or not self.key_path.exists():
             return False
         try:
-            cert = ssl._ssl._test_decode_cert(str(self.cert_path))
+            # ssl._ssl._test_decode_cert is a private API but works across Python versions
+            cert = ssl._ssl._test_decode_cert(str(self.cert_path))  # type: ignore[attr-defined]
             not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
             return not_after > datetime.utcnow() + timedelta(days=7)  # 7-day buffer
         except Exception:
@@ -82,16 +94,12 @@ class CertManager:
         """Generate a self-signed certificate for development."""
         logger.info(f"Generating self-signed certificate for {common_name}...")
 
-        # Generate private key
-        key = crypto_util.make_key(key_size) if ACME_AVAILABLE else self._gen_key_openssl(key_size)
-
-        # Generate self-signed cert
         if ACME_AVAILABLE:
-            from cryptography import x509
-            from cryptography.x509.oid import NameOID
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.asymmetric import rsa
-            from cryptography.hazmat.primitives import serialization
+            # Use cryptography library
+            key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=key_size,
+            )
 
             subject = issuer = x509.Name([
                 x509.NameAttribute(NameOID.COMMON_NAME, common_name),
@@ -134,16 +142,6 @@ class CertManager:
         logger.info(f"Self-signed cert saved to {self.cert_dir}")
         return self.cert_path, self.key_path
 
-    def _gen_key_openssl(self, key_size: int):
-        """Generate RSA key using openssl command."""
-        result = subprocess.run(
-            ["openssl", "genrsa", str(key_size)],
-            capture_output=True, check=True
-        )
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        return serialization.load_pem_private_key(result.stdout, password=None)
-
     def _gen_self_signed_openssl(self, cn: str, days: int, key_size: int) -> Tuple[bytes, bytes]:
         """Generate self-signed cert using openssl command."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,9 +169,11 @@ class CertManager:
         return cert_pem, key_pem
 
     async def request_letsencrypt_cert(self) -> Tuple[Path, Path]:
-        """Request a certificate from Let's Encrypt via ACME."""
+        """Request a certificate from Let's Encrypt via ACME (HTTP-01 challenge)."""
         if not ACME_AVAILABLE:
-            raise RuntimeError("ACME libraries not installed. Run: pip install acme josepy cryptography")
+            raise RuntimeError(
+                "ACME libraries not installed. Run: pip install acme josepy cryptography"
+            )
         if not self.domain:
             raise ValueError("Domain required for Let's Encrypt certificate")
         if not self.email:
@@ -192,45 +192,48 @@ class CertManager:
         account_key_path = self.cert_dir / "account_key.pem"
         if account_key_path.exists():
             with open(account_key_path, "rb") as f:
-                account_key = jose.JWKRSA.load(f.read())
+                account_key = jose.JWKRSA.load(f.read())  # type: ignore[union-attr]
         else:
-            account_key = jose.JWKRSA(key=crypto_util.make_key(2048))
+            account_key = jose.JWKRSA(key=rsa.generate_private_key(  # type: ignore[union-attr]
+                public_exponent=65537, key_size=2048
+            ))
             account_key_path.write_bytes(account_key.to_pem())
 
         # Create ACME client
-        net = client.ClientNetwork(account_key, user_agent="FCS-Anchor/1.0")
-        directory = messages.Directory.from_json(net.get(directory_url).json())
-        acme_client = ClientV2(directory, net=net)
+        net = client.ClientNetwork(account_key, user_agent="FCS-Anchor/1.0")  # type: ignore[union-attr]
+        directory = messages.Directory.from_json(net.get(directory_url).json())  # type: ignore[union-attr]
+        acme_client = ClientV2(directory, net=net)  # type: ignore[union-attr]
 
         # Register account
         try:
             regr = acme_client.new_account(
-                messages.NewRegistration.from_data(email=self.email, terms_of_service_agreed=True)
+                messages.NewRegistration.from_data(  # type: ignore[union-attr]
+                    email=self.email, terms_of_service_agreed=True
+                )
             )
             logger.info(f"ACME account registered: {regr.uri}")
-        except messages.ConflictError:
-            # Account already exists
-            pass
+        except messages.ConflictError:  # type: ignore[union-attr]
+            pass  # Account already exists
 
         # Request certificate
-        cert_key = crypto_util.make_key(2048)
-        csr = crypto_util.make_csr(cert_key, [self.domain])
+        cert_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        csr = crypto_util.make_csr(cert_key, [self.domain])  # type: ignore[union-attr]
 
-        # HTTP-01 challenge (requires port 80)
         order = acme_client.new_order(csr)
         authz = order.authorizations[0]
-        challenge = next(c for c in authz.body.challenges if isinstance(c.chall, challenges.HTTP01))
 
-        # TODO: This requires a running HTTP server on port 80 to serve the challenge
-        # For now, we'll note this limitation and use TLS-ALPN-01 if available
-        # or suggest using certbot externally
+        # HTTP-01 challenge (requires port 80)
+        challenge = next(
+            c for c in authz.body.challenges
+            if isinstance(c.chall, challenges.HTTP01)  # type: ignore[union-attr]
+        )
 
         response = challenge.response(account_key)
         acme_client.answer_challenge(challenge, response)
 
         # Wait for validation
         authz = acme_client.poll(authz)
-        if authz.body.status != messages.STATUS_VALID:
+        if authz.body.status != messages.STATUS_VALID:  # type: ignore[union-attr]
             raise RuntimeError(f"Challenge failed: {authz.body.status}")
 
         # Finalize order
@@ -238,33 +241,55 @@ class CertManager:
         fullchain_pem = order.fullchain_pem
 
         # Save certificate and key
-        self.cert_path.write_bytes(crypto_util.dump_certificate(order.certificate).encode())
+        self.cert_path.write_bytes(crypto_util.dump_certificate(order.certificate).encode())  # type: ignore[union-attr]
         self.key_path.write_bytes(cert_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
-        ).decode())
+        ))
 
-        # Save chain and fullchain
-        chain_pem = "\n".join(crypto_util.dump_certificate(c).decode() for c in order.chain)
-        self.chain_path.write_bytes(chain_pem.encode())
+        # Save chain
+        self.chain_path.write_bytes(
+            "\n".join(crypto_util.dump_certificate(c).decode() for c in order.chain).encode()  # type: ignore[union-attr]
+        )
         self.fullchain_path.write_bytes(fullchain_pem.encode())
 
-        logger.info(f"Let's Encrypt certificate saved to {self.cert_dir}")
+        logger.info(f"Let's Encrypt cert saved to {self.cert_dir}")
+        return self.cert_path, self.key_path
+
+    def load_existing_cert(self, cert_file: Path, key_file: Path) -> Tuple[Path, Path]:
+        """Load pre-existing certificate and key files."""
+        import shutil
+        shutil.copy2(cert_file, self.cert_path)
+        shutil.copy2(key_file, self.key_path)
+
+        # Try to load chain if available
+        chain_file = cert_file.parent / "chain.pem"
+        fullchain_file = cert_file.parent / "fullchain.pem"
+        if chain_file.exists():
+            shutil.copy2(chain_file, self.chain_path)
+        else:
+            shutil.copy2(cert_file, self.chain_path)
+
+        if fullchain_file.exists():
+            shutil.copy2(fullchain_file, self.fullchain_path)
+        else:
+            # Create fullchain from cert + chain
+            cert_data = self.cert_path.read_bytes()
+            chain_data = self.chain_path.read_bytes()
+            self.fullchain_path.write_bytes(cert_data + b"\n" + chain_data)
+
+        logger.info(f"Loaded existing cert from {cert_file}")
         return self.cert_path, self.key_path
 
     async def ensure_certificate(self) -> Tuple[Path, Path]:
-        """
-        Ensure we have a valid certificate. Strategy:
-        1. If valid cert exists, use it
-        2. If domain configured and ACME available, try Let's Encrypt
-        3. Fall back to self-signed
-        """
+        """Ensure we have a valid certificate, generating/requesting as needed."""
         if self.has_valid_cert():
             logger.info(f"Using existing valid certificate from {self.cert_dir}")
             return self.cert_path, self.key_path
 
-        if self.domain and ACME_AVAILABLE:
+        # Priority: Let's Encrypt (if domain configured) > self-signed
+        if self.domain and self.email and ACME_AVAILABLE:
             try:
                 return await self.request_letsencrypt_cert()
             except Exception as e:
@@ -274,47 +299,34 @@ class CertManager:
         cn = self.domain or "localhost"
         return self.generate_self_signed(common_name=cn)
 
-    def get_ssl_context(self) -> ssl.SSLContext:
-        """Create SSL context for uvicorn."""
-        cert_path, key_path = asyncio.run(self.ensure_certificate())
-
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(str(cert_path), str(key_path))
-        # Modern security settings
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20")
-        return context
-
-    async def start_auto_renewal(self, check_interval_hours: int = 12):
+    async def start_auto_renewal(self):
         """Start background task for certificate renewal."""
         if not self.auto_renew or not self.domain:
             return
 
         async def renewal_loop():
             while True:
-                await asyncio.sleep(check_interval_hours * 3600)
-                if self.has_valid_cert():
-                    # Check if expiring soon (within 30 days)
+                # Check every 12 hours
+                await asyncio.sleep(12 * 3600)
+                if not self.has_valid_cert():
+                    logger.info("Certificate expiring soon, attempting renewal...")
                     try:
-                        cert = ssl._ssl._test_decode_cert(str(self.cert_path))
-                        not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                        if not_after < datetime.utcnow() + timedelta(days=30):
-                            logger.info("Certificate expiring soon, attempting renewal...")
-                            try:
-                                await self.request_letsencrypt_cert()
-                                logger.info("Certificate renewed successfully")
-                            except Exception as e:
-                                logger.error(f"Certificate renewal failed: {e}")
-                    except Exception:
-                        pass
+                        await self.request_letsencrypt_cert()
+                        logger.info("Certificate renewed successfully")
+                    except Exception as e:
+                        logger.error(f"Renewal failed: {e}")
 
         self._renewal_task = asyncio.create_task(renewal_loop())
-        logger.info("Certificate auto-renewal started")
+        logger.info("Auto-renewal started")
 
     def stop_auto_renewal(self):
+        """Stop the auto-renewal background task."""
         if self._renewal_task:
             self._renewal_task.cancel()
-            self._renewal_task = None
+            try:
+                asyncio.get_event_loop().run_until_complete(self._renewal_task)
+            except asyncio.CancelledError:
+                pass
 
 
 def create_cert_manager_from_env(cert_dir: Path) -> CertManager:
