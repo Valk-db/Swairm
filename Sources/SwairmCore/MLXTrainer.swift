@@ -240,7 +240,7 @@ public actor MLXTrainer: LocalTraining {
         if model == nil {
             // Load base model from local directory via MLXLMCommon
             let modelDirectory = URL(fileURLWithPath: config.modelPath)
-            let loadedModel: any LanguageModel = try await @Sendable {
+            let loadedModel: any LanguageModel = try await {
                 // Use LLMModelFactory directly rather than the free-function
                 // MLXLMCommon loadModel: the latter resolves a factory through the
                 // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
