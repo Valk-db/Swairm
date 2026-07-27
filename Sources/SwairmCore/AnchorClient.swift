@@ -39,7 +39,7 @@ public enum AnchorClientError: Error {
     case hmacInvalid
 }
 
-public final class AnchorClient: AnchorConnecting {
+public final class AnchorClient: AnchorConnecting, CurriculumDownloading {
     public let base: URL
     private let session: URLSession
     private let hmacSecret: Data?
