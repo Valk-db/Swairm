@@ -55,15 +55,6 @@ public enum ModelDownloadError: Error, Sendable {
     case notImplemented
 }
 
-/// Errors specific to base model download.
-public enum BaseModelDownloadError: Error, Sendable {
-    case manifestFetchFailed(model: String)
-    case fileDownloadFailed(file: String, underlying: Error)
-    case integrityCheckFailed(file: String, expected: String, actual: String)
-    case directoryCreationFailed
-    case writeFailed(underlying: Error)
-}
-
 /// Downloads curriculum shards and model adapters from the Anchor.
 /// Uses AnchorClient which conforms to CurriculumDownloading.
 public actor ModelDownloader {
