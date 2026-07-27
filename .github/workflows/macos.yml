@@ -96,7 +96,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Anchor + tooling dependencies
-        run: pip install numpy scikit-learn fastapi uvicorn huggingface_hub prometheus-client
+        run: pip install numpy scikit-learn fastapi uvicorn huggingface_hub prometheus-client acme josepy cryptography
 
       - name: Download tiny MLX model
         run: |
@@ -122,7 +122,7 @@ jobs:
           rm -f state.json
           FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
           sleep 3
-          curl -sf http://127.0.0.1:8000/status
+          curl -sf http://127.0.0.1:8000/status || (cat anchor.log && exit 1)
 
       # mlx-swift's SwiftPM build never compiles the Metal kernels into a
       # metallib (its only build plugin is CUDA-only), so MLX's Metal backend
