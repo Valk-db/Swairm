@@ -150,10 +150,12 @@ All four CI jobs (build-test, integration, sideload-ipa, mlx-e2e) green as of HE
 - Auto-renewal background task (12h interval, renews when <7 days validity)
 - `create_cert_manager_from_env()` factory reading `FCS_TLS_DOMAIN`, `FCS_TLS_EMAIL`, `FCS_TLS_STAGING`, `FCS_TLS_AUTO_RENEW`
 - Optional ACME dependencies (`acme`, `josepy`, `cryptography`) with type stubs for when not installed
+- ACME HTTP-01 challenge handling: `register_acme_challenge()`, `get_acme_challenge()`, `clear_acme_challenge()` for Let's Encrypt validation
 
 **main.py integration:**
 - FastAPI lifespan handler initializes `CertManager` from env, calls `ensure_certificate()`, starts auto-renewal
 - `/health` endpoint includes TLS status (`tls_enabled`, `domain`, `cert_path`)
+- `/.well-known/acme-challenge/{token}` endpoint serves ACME HTTP-01 challenge responses for Let's Encrypt domain validation
 - Startup logs security posture: HMAC auth status (enabled/disabled) + TLS status (managed by app vs external proxy vs plaintext)
 - **Security note:** HMAC (D12) provides request authenticity/integrity only — NOT transport encryption. TLS is separate concern.
 

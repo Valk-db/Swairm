@@ -83,6 +83,20 @@ class CertManager:
         self.fullchain_path = self.cert_dir / "fullchain.pem"
 
         self._renewal_task: Optional[asyncio.Task] = None
+        # ACME HTTP-01 challenge storage: token -> key_authorization
+        self._acme_challenges: dict[str, str] = {}
+
+    def register_acme_challenge(self, token: str, key_authorization: str) -> None:
+        """Register an ACME HTTP-01 challenge response for Let's Encrypt validation."""
+        self._acme_challenges[token] = key_authorization
+
+    def get_acme_challenge(self, token: str) -> Optional[str]:
+        """Get the ACME challenge response for a given token."""
+        return self._acme_challenges.get(token)
+
+    def clear_acme_challenge(self, token: str) -> None:
+        """Clear an ACME challenge after validation."""
+        self._acme_challenges.pop(token, None)
 
     def has_valid_cert(self) -> bool:
         """Check if we have a valid (non-expired) certificate."""
@@ -240,12 +254,17 @@ class CertManager:
         )
 
         response = challenge.response(account_key)
+        # Register the challenge response so the HTTP endpoint can serve it
+        self.register_acme_challenge(challenge.chall.token, response.key_authorization)  # type: ignore[union-attr]
         acme_client.answer_challenge(challenge, response)
 
         # Wait for validation
         authz = acme_client.poll(authz)
         if authz.body.status != messages.STATUS_VALID:  # type: ignore[union-attr, attr-defined]
             raise RuntimeError(f"Challenge failed: {authz.body.status}")  # type: ignore[union-attr, attr-defined]
+
+        # Clear the challenge after successful validation
+        self.clear_acme_challenge(challenge.chall.token)  # type: ignore[union-attr]
 
         # Finalize order
         order = acme_client.poll_and_finalize(order)

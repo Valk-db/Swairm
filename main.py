@@ -640,6 +640,20 @@ try:
             "tls": cert_info,
         }
 
+    @app.get("/.well-known/acme-challenge/{token}")
+    def acme_challenge(token: str):
+        """ACME HTTP-01 challenge endpoint for Let's Encrypt validation.
+
+        Let's Encrypt calls this endpoint to verify domain ownership.
+        The token is provided by the ACME server, and we must return the
+        key_authorization that was computed during certificate request.
+        """
+        if _cert_manager:
+            key_auth = _cert_manager.get_acme_challenge(token)
+            if key_auth:
+                return Response(content=key_auth, media_type="text/plain")
+        return Response(status_code=404, content="Challenge not found")
+
     @app.get("/metrics")
     def metrics():
         """Prometheus metrics endpoint."""
