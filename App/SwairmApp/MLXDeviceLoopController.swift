@@ -1,5 +1,8 @@
 // Drives one MLXDeviceLoop against a LAN Anchor from the UI.
 // Mirrors DeviceLoopController API but uses real MLX DoRA training.
+//
+// Model & curriculum download: uses ModelDownloader to fetch shards and
+// adapter from the Anchor before starting training.
 
 import SwiftUI
 import UIKit
@@ -25,17 +28,25 @@ final class MLXDeviceLoopController {
     var sequenceLength = 128
     var learningRate: Float = 1e-4
 
+    // Curriculum epoch to download
+    var curriculumEpoch = 0
+
     // ------------------------------------------------------------ state
     private(set) var isRunning = false
+    private(set) var isDownloading = false
     private(set) var anchorVersion: Int?
     private(set) var lastLoss: Float?
     private(set) var log: [LogEntry] = []
 
     private var runTask: Task<Void, Never>?
+    private var downloadTask: Task<Void, Never>?
 
     typealias LogEntry = DeviceLoopController.LogEntry
 
     var deviceID: String { "phone\(deviceIndex)" }
+
+    // Model downloader for fetching curriculum and adapters
+    private let modelDownloader = ModelDownloader()
 
     // ------------------------------------------------------------ control
     func start() {
@@ -102,6 +113,90 @@ final class MLXDeviceLoopController {
     func stop() {
         runTask?.cancel()
         runTask = nil
+    }
+
+    // ------------------------------------------------------------ Downloads
+    /// Download curriculum shards for the configured epoch.
+    func downloadCurriculum() {
+        guard !isDownloading else { return }
+        guard let url = URL(string: anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+            return
+        }
+
+        let anchor = AnchorClient(base: url)
+        let epoch = curriculumEpoch
+
+        isDownloading = true
+        append("Downloading curriculum epoch \(epoch)...")
+
+        downloadTask = Task { [weak self] in
+            defer { self?.isDownloading = false }
+
+            do {
+                let epochDir = try await self?.modelDownloader.downloadCurriculum(
+                    epoch: epoch,
+                    downloader: anchor
+                ) { progress in
+                    Task { @MainActor in
+                        self?.append(progress.message)
+                    }
+                }
+                await MainActor.run {
+                    if let dir = epochDir {
+                        self?.append("Curriculum epoch \(epoch) ready at \(dir.lastPathComponent)")
+                        self?.curriculumDirectory = "curriculum/epoch_\(epoch)"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self?.append("Curriculum download failed: \(error)", isError: true)
+                }
+            }
+        }
+    }
+
+    /// Download the latest model adapter from the Anchor.
+    func downloadModel() {
+        guard !isDownloading else { return }
+        guard let url = URL(string: anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+            return
+        }
+
+        let anchor = AnchorClient(base: url)
+
+        isDownloading = true
+        append("Downloading latest model adapter...")
+
+        downloadTask = Task { [weak self] in
+            defer { self?.isDownloading = false }
+
+            do {
+                _ = try await self?.modelDownloader.downloadLatestModel(
+                    anchor: anchor
+                ) { progress in
+                    Task { @MainActor in
+                        self?.append(progress.message)
+                    }
+                }
+                await MainActor.run {
+                    self?.append("Model adapter downloaded successfully")
+                }
+            } catch {
+                await MainActor.run {
+                    self?.append("Model download failed: \(error)", isError: true)
+                }
+            }
+        }
+    }
+
+    /// Cancel any in-progress download.
+    func cancelDownload() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        isDownloading = false
+        append("Download cancelled")
     }
 
     // ------------------------------------------------------------ private

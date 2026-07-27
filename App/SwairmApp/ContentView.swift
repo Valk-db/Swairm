@@ -74,6 +74,31 @@ struct ContentView: View {
                                 value: $mlxController.sequenceLength, in: 64...512, step: 32)
                             .disabled(isRunning)
                     }
+
+                    Section("Downloads") {
+                        Stepper("Curriculum epoch: \(mlxController.curriculumEpoch)",
+                                value: $mlxController.curriculumEpoch, in: 0...999)
+                            .disabled(isRunning || mlxController.isDownloading)
+
+                        Button("Download Curriculum") {
+                            mlxController.downloadCurriculum()
+                        }
+                        .disabled(isRunning || mlxController.isDownloading)
+                        .fontWeight(.semibold)
+
+                        Button("Download Model Adapter") {
+                            mlxController.downloadModel()
+                        }
+                        .disabled(isRunning || mlxController.isDownloading)
+                        .fontWeight(.semibold)
+
+                        if mlxController.isDownloading {
+                            Button("Cancel Download") {
+                                mlxController.cancelDownload()
+                            }
+                            .foregroundStyle(.red)
+                        }
+                    }
                 }
 
                 Section("Background Training") {
