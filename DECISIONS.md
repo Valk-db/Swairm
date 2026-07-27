@@ -167,3 +167,31 @@ All four CI jobs (build-test, integration, sideload-ipa, mlx-e2e) green as of HE
 - NPY.swift scalar fallback for Float16 is correct but slow for large arrays;
   consider vDSP_vfloat2half/vhalf2float with runtime availability checks
   when targeting iOS 18+ (where they may be available on-device).
+
+## Cross-Platform Decentralized AI Standard — Open Items (NEW)
+
+### Transport & Runtime
+- **TLS termination strategy**: First-class TLS in Anchor (auto-cert via Let's Encrypt/ACME) vs reverse-proxy (nginx/Caddy). Required for any non-localhost deployment.
+- **WebTransport / WebRTC data channels**: Browser clients need bidirectional streaming without WebSocket overhead. Anchor needs `/ws` or `/webtransport` upgrade endpoints.
+- **Windows/Linux client runtime**: Python client exists (`torch_client.py`) but isn't a first-class `swairm-client` package with the same protocol guarantees as Swift. Need unified CLI across platforms (`pip install swairm-client` / `brew install swairm` / `winget install swairm`).
+
+### Aggregation & Fairness
+- **Heterogeneous device capability scoring**: Phones (NPU/GPU memory), laptops (CPU/GPU), desktops (multi-GPU), servers (H100/A100) contribute unequally. Current `detect_skew()` only sees participation patterns, not compute heterogeneity. Need capability attestation + weighted aggregation.
+- **Economic incentive / credit system**: "Financially disadvantaged" users need verifiable credit for contributed compute (proof-of-training, not just proof-of-stake). Anchor should issue signed receipts; fleet needs reputation tracking.
+- **Byzantine resilience beyond trim**: Current geometric median + trim handles gradient outliers. Need model-poisoning detection (backdoor triggers, label-flip) and client reputation decay.
+
+### Curriculum & Data
+- **Curriculum authoring pipeline**: `tools/make_curriculum.py` exists but isn't a standard format. Need versioned curriculum spec (tokenizer-agnostic, shard format v2+), CLI for `swairm curriculum create/push/verify`, and marketplace for curriculum sharing.
+- **Data privacy / federated dataset shards**: Current shards are public NPZ files. For sensitive data: encrypted shards + client-side decryption keys, or secure enclaves (TEE/SEV-SNP) on server-grade hardware.
+
+### Observability & Operations
+- **Fleet dashboard**: Prometheus `/metrics` exists (D14). Need Grafana dashboards + alerting rules as code (`tools/monitoring/`), fleet health API (`/fleet/health`), and device-side telemetry opt-in.
+- **Multi-Anchor federation**: Single Anchor is a SPOF. Need Anchor-to-Anchor gossip for global model sync (CRDT or Raft), and DNS-based fleet discovery (`_swairm._tcp`).
+
+### Packaging & Distribution
+- **Unified model format**: MLX (Apple), Safetensors (HF/PyTorch), ONNX (cross-runtime), GGUF (llama.cpp). Anchor should serve all formats; client negotiates via `Accept` header.
+- **Binary distribution**: GitHub Releases + Homebrew + Scoop + AUR + PyPI for `swairm-cli`. Signed/notarized macOS/iOS binaries. Windows MSI installer.
+
+### Governance
+- **Protocol versioning**: Wire format (NPZ + headers) needs semver (`FCS-Proto/1.0`, `FCS-Proto/1.1`...). Breaking changes require 2-version overlap.
+- **Spec repository**: Separate `swairm-spec` repo with RFC process for protocol changes, independent of implementation repos.

@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 try:
     from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
@@ -26,9 +27,15 @@ try:
     MLX_LM_AVAILABLE = True
 except ImportError:
     MLX_LM_AVAILABLE = False
-    snapshot_download = None  # type: ignore[assignment]
-    convert = None  # type: ignore[assignment]
     print("Warning: mlx_lm/huggingface_hub not available, will only copy existing MLX models")
+
+def _snapshot_download(repo_id: str) -> str:
+    """Wrapper to satisfy type checker - only called when MLX_LM_AVAILABLE is True."""
+    return snapshot_download(repo_id=repo_id)  # type: ignore[return-value, union-attr]
+
+def _convert_hf_to_mlx(source_dir: str, output_dir: str) -> None:
+    """Wrapper to satisfy type checker - only called when MLX_LM_AVAILABLE is True."""
+    convert(source_dir, output_dir)  # type: ignore[union-attr]
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -40,7 +47,7 @@ def compute_sha256(filepath: Path) -> str:
     return sha256.hexdigest()
 
 
-def prepare_model(hf_repo: str, output_dir: Path, anchor_dir: Path = None) -> dict:
+def prepare_model(hf_repo: str, output_dir: Path, anchor_dir: Optional[Path] = None) -> dict:
     """
     Download and prepare a base model for the Anchor server.
 
@@ -58,13 +65,13 @@ def prepare_model(hf_repo: str, output_dir: Path, anchor_dir: Path = None) -> di
         print(f"Downloading {hf_repo} from HuggingFace...")
         if not MLX_LM_AVAILABLE:
             raise RuntimeError("huggingface_hub not available for downloading models")
-        local_path = snapshot_download(repo_id=hf_repo)
+        local_path = _snapshot_download(hf_repo)
         source_dir = Path(local_path)
 
         # Convert to MLX format if needed
         if MLX_LM_AVAILABLE:
             print("Converting to MLX format...")
-            convert(str(source_dir), str(output_dir))
+            _convert_hf_to_mlx(str(source_dir), str(output_dir))
             source_dir = output_dir
         else:
             # If mlx_lm not available, just copy what we have

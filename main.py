@@ -44,6 +44,7 @@ Curriculum shard format (.npz):
 Run server:    pip install fastapi uvicorn
                uvicorn main:app --host 0.0.0.0 --port 8000
                # With TLS: uvicorn main:app --host 0.0.0.0 --port 8000 --ssl-certfile=cert.pem --ssl-keyfile=key.pem
+               # With auto-TLS (Let's Encrypt): FCS_TLS_DOMAIN=example.com FCS_TLS_EMAIL=admin@example.com uvicorn main:app --host 0.0.0.0 --port 8443
 Self-test:     python main.py --selftest     (no HTTP, no fastapi needed)
 """
 
@@ -64,6 +65,7 @@ from typing import Optional
 import numpy as np
 
 from aggregator import aggregate_round
+from cert_manager import CertManager, create_cert_manager_from_env
 
 # Prometheus metrics (optional dependency)
 try:
@@ -128,6 +130,9 @@ BASE_MODEL_DIR = BASE_DIR / "models" / "base"
 # Cache for in-progress model preparations to avoid duplicate downloads
 _preparing_models: dict[str, asyncio.Task] = {}
 _preparing_lock = asyncio.Lock()
+
+# TLS Certificate Manager
+_cert_manager: Optional[CertManager] = None
 
 
 async def _prepare_base_model(model_name: str) -> None:
@@ -549,10 +554,26 @@ try:
     from contextlib import asynccontextmanager
     from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 
+    # Global cert manager instance
+    _cert_manager: Optional[CertManager] = None
+
     @asynccontextmanager
     async def lifespan(app):
-        global main_loop
+        global main_loop, _cert_manager
         main_loop = asyncio.get_running_loop()
+
+        # Initialize TLS certificate manager
+        _cert_manager = create_cert_manager_from_env(BASE_DIR / "certs")
+        try:
+            cert_path, key_path = await _cert_manager.ensure_certificate()
+            print(f"[startup] TLS certificate: {cert_path}")
+            print(f"[startup] TLS private key: {key_path}")
+            # Start auto-renewal if enabled
+            await _cert_manager.start_auto_renewal()
+        except Exception as e:
+            print(f"[startup] WARNING: Failed to initialize TLS: {e}")
+            print("[startup] Running without TLS -- set FCS_TLS_DOMAIN for auto-TLS")
+
         # Security posture banner -- printed once at startup so it's always
         # visible in server logs, regardless of how uvicorn was invoked.
         # HMAC (D12) authenticates requests; it does NOT encrypt them. TLS
@@ -561,12 +582,16 @@ try:
             print("[startup] HMAC auth: ENABLED (X-HMAC-Signature required on protected paths)")
         else:
             print("[startup] HMAC auth: DISABLED (FCS_HMAC_SECRET unset -- dev mode, requests unauthenticated)")
-        print("[startup] Transport encryption: NOT managed by this app -- "
+        print("[startup] Transport encryption: TLS " + ("ENABLED" if _cert_manager and _cert_manager.has_valid_cert() else "NOT managed by this app -- "
               "traffic is plaintext unless uvicorn was started with "
               "--ssl-certfile/--ssl-keyfile. HMAC alone does not encrypt "
-              "adapter or curriculum payloads.")
+              "adapter or curriculum payloads."))
         threading.Thread(target=worker_loop, daemon=True).start()
         yield
+
+        # Cleanup
+        if _cert_manager:
+            _cert_manager.stop_auto_renewal()
 
     app = FastAPI(title="FCS Anchor", lifespan=lifespan)
 
@@ -587,6 +612,26 @@ try:
                 "rounds": state["rounds"],
                 "skew_detected": detect_skew(state),
                 "pending": len(list(QUEUE_PENDING.glob("*.npz")))}
+
+    @app.get("/health")
+    def health():
+        """Health check endpoint for load balancers / fleet discovery."""
+        state = load_state()
+        cert_info = {"tls_enabled": False}
+        if _cert_manager:
+            cert_info = {
+                "tls_enabled": _cert_manager.has_valid_cert(),
+                "domain": _cert_manager.domain,
+                "cert_path": str(_cert_manager.cert_path),
+            }
+        return {
+            "status": "healthy",
+            "version": state["version"],
+            "curriculum_epoch": state["curriculum_epoch"],
+            "rounds": state["rounds"],
+            "pending_uploads": len(list(QUEUE_PENDING.glob("*.npz"))),
+            "tls": cert_info,
+        }
 
     @app.get("/metrics")
     def metrics():
