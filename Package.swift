@@ -31,6 +31,9 @@ let package = Package(
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 "ZIPFoundation"
             ],
+            swiftSettings: [
+                .unsafeFlags(["-Wno-deprecated-declarations"])
+            ],
             cSettings: [
                 .unsafeFlags(["-Wno-deprecated-declarations"])
             ]

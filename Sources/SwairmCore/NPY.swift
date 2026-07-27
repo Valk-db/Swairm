@@ -223,7 +223,7 @@ extension NPYArray {
         var data = Data(count: floats.count * 4)
         data.withUnsafeMutableBytes { ptr in
             let dst = ptr.bindMemory(to: UInt32.self).baseAddress!
-            bits.withUnsafeBufferPointer { src in
+            _ = bits.withUnsafeBufferPointer { src in
                 memcpy(dst, src.baseAddress, bits.count * MemoryLayout<UInt32>.stride)
             }
         }

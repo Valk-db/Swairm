@@ -252,7 +252,7 @@ public actor MLXTrainer: LocalTraining {
                     using: LocalTokenizerLoader()
                 )
                 return context.model
-            }()
+            }() as any LanguageModel
             self.model = loadedModel
 
             // LoRAContainer.from matches `keys` by EXACT equality against
