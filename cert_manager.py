@@ -16,6 +16,17 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 # Try to import ACME libraries (optional)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import josepy as jose
+    from acme import client, messages, challenges, crypto_util
+    from acme.client import ClientV2
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
 try:
     import josepy as jose
     from acme import client, messages, challenges, crypto_util
@@ -27,7 +38,7 @@ try:
     ACME_AVAILABLE = True
 except ImportError:
     ACME_AVAILABLE = False
-    # Type stubs for when ACME is not available
+    # Runtime stubs (never actually used since we check ACME_AVAILABLE before calling)
     jose = None  # type: ignore
     client = None  # type: ignore
     messages = None  # type: ignore
@@ -96,37 +107,37 @@ class CertManager:
 
         if ACME_AVAILABLE:
             # Use cryptography library
-            key = rsa.generate_private_key(
+            key = rsa.generate_private_key(  # type: ignore[union-attr]
                 public_exponent=65537,
                 key_size=key_size,
             )
 
-            subject = issuer = x509.Name([
-                x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+            subject = issuer = x509.Name([  # type: ignore[union-attr]
+                x509.NameAttribute(NameOID.COMMON_NAME, common_name),  # type: ignore[union-attr]
             ])
             cert = (
-                x509.CertificateBuilder()
+                x509.CertificateBuilder()  # type: ignore[union-attr]
                 .subject_name(subject)
                 .issuer_name(issuer)
                 .public_key(key.public_key())
-                .serial_number(x509.random_serial_number())
+                .serial_number(x509.random_serial_number())  # type: ignore[union-attr]
                 .not_valid_before(datetime.utcnow())
                 .not_valid_after(datetime.utcnow() + timedelta(days=days))
                 .add_extension(
-                    x509.SubjectAlternativeName([
-                        x509.DNSName(common_name),
-                        x509.DNSName("localhost"),
-                        x509.IPAddress(__import__('ipaddress').ip_address("127.0.0.1")),
+                    x509.SubjectAlternativeName([  # type: ignore[union-attr]
+                        x509.DNSName(common_name),  # type: ignore[union-attr]
+                        x509.DNSName("localhost"),  # type: ignore[union-attr]
+                        x509.IPAddress(__import__('ipaddress').ip_address("127.0.0.1")),  # type: ignore[union-attr]
                     ]),
                     critical=False,
                 )
-                .sign(key, hashes.SHA256())
+                .sign(key, hashes.SHA256())  # type: ignore[union-attr]
             )
-            cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+            cert_pem = cert.public_bytes(serialization.Encoding.PEM)  # type: ignore[union-attr]
             key_pem = key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
+                encoding=serialization.Encoding.PEM,  # type: ignore[union-attr]
+                format=serialization.PrivateFormat.PKCS8,  # type: ignore[union-attr]
+                encryption_algorithm=serialization.NoEncryption(),  # type: ignore[union-attr]
             )
         else:
             # Fallback to openssl command
@@ -197,7 +208,7 @@ class CertManager:
             account_key = jose.JWKRSA(key=rsa.generate_private_key(  # type: ignore[union-attr]
                 public_exponent=65537, key_size=2048
             ))
-            account_key_path.write_bytes(account_key.to_pem())
+            account_key_path.write_bytes(account_key.to_pem())  # type: ignore[union-attr]
 
         # Create ACME client
         net = client.ClientNetwork(account_key, user_agent="FCS-Anchor/1.0")  # type: ignore[union-attr]
@@ -216,11 +227,11 @@ class CertManager:
             pass  # Account already exists
 
         # Request certificate
-        cert_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cert_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)  # type: ignore[union-attr]
         csr = crypto_util.make_csr(cert_key, [self.domain])  # type: ignore[union-attr]
 
         order = acme_client.new_order(csr)
-        authz = order.authorizations[0]
+        authz = order.authorizations[0]  # type: ignore[index]
 
         # HTTP-01 challenge (requires port 80)
         challenge = next(
@@ -233,8 +244,8 @@ class CertManager:
 
         # Wait for validation
         authz = acme_client.poll(authz)
-        if authz.body.status != messages.STATUS_VALID:  # type: ignore[union-attr]
-            raise RuntimeError(f"Challenge failed: {authz.body.status}")
+        if authz.body.status != messages.STATUS_VALID:  # type: ignore[union-attr, attr-defined]
+            raise RuntimeError(f"Challenge failed: {authz.body.status}")  # type: ignore[union-attr, attr-defined]
 
         # Finalize order
         order = acme_client.poll_and_finalize(order)
@@ -243,9 +254,9 @@ class CertManager:
         # Save certificate and key
         self.cert_path.write_bytes(crypto_util.dump_certificate(order.certificate).encode())  # type: ignore[union-attr]
         self.key_path.write_bytes(cert_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
+            encoding=serialization.Encoding.PEM,  # type: ignore[union-attr]
+            format=serialization.PrivateFormat.PKCS8,  # type: ignore[union-attr]
+            encryption_algorithm=serialization.NoEncryption(),  # type: ignore[union-attr]
         ))
 
         # Save chain
