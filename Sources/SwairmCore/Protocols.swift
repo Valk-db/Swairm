@@ -248,7 +248,7 @@ public protocol BaseModelDownloading: Sendable {
 
     /// Stream a single base model file to disk. Validates SHA256 after download.
     /// Returns the local file URL on success.
-    func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL) async throws -> URL
+    func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL, expectedSHA: String) async throws -> URL
 }
 
 public enum BaseModelDownloadError: Error, Sendable {

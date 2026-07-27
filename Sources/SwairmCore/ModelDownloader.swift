@@ -57,7 +57,7 @@ public enum ModelDownloadError: Error, Sendable {
 
 /// Errors specific to base model download.
 public enum BaseModelDownloadError: Error, Sendable {
-    case manifestFetchFailed(model: String
+    case manifestFetchFailed(model: String)
     case fileDownloadFailed(file: String, underlying: Error)
     case integrityCheckFailed(file: String, expected: String, actual: String)
     case directoryCreationFailed

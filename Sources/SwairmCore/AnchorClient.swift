@@ -17,6 +17,7 @@ import CommonCrypto
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import SwairmCore
 
 public struct AnchorStatus: Codable, Sendable {
     public let version: Int
@@ -224,7 +225,7 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
         let (data, http) = try await request(path: "/models/base/\(modelName)/manifest", method: "GET", body: nil)
         guard http.statusCode == 200 else {
             if http.statusCode == 404 {
-                throw BaseModelError.manifestNotFound(modelName)
+                throw BaseModelDownloadError.manifestNotFound(modelName)
             }
             throw AnchorClientError.httpStatus(http.statusCode)
         }
@@ -247,19 +248,19 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
     public func downloadBaseModelFile(modelName: String, fileName: String, to destination: URL, expectedSHA: String) async throws -> URL {
         // Validate file name to prevent path traversal
         if fileName.contains("..") || fileName.contains("/") || fileName.contains("\\") {
-            throw BaseModelError.invalidFileName(fileName)
+            throw BaseModelDownloadError.invalidFileName(fileName)
         }
         let (data, http) = try await request(path: "/models/base/\(modelName)/\(fileName)", method: "GET", body: nil)
         guard http.statusCode == 200 else {
             if http.statusCode == 404 {
-                throw BaseModelError.fileNotFound(modelName, fileName)
+                throw BaseModelDownloadError.fileNotFound(modelName, fileName)
             }
             throw AnchorClientError.httpStatus(http.statusCode)
         }
         // Validate SHA256
         let actualSHA = computeSHA256(data)
         if actualSHA != expectedSHA {
-            throw BaseModelError.integrityCheckFailed(expected: expectedSHA, actual: actualSHA)
+            throw BaseModelDownloadError.integrityCheckFailed(expected: expectedSHA, actual: actualSHA)
         }
         try data.write(to: destination, options: .atomic)
         return destination
