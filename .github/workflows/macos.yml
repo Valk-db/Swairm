@@ -57,9 +57,8 @@ jobs:
       - name: Start Anchor (fast aggregation interval)
         run: |
           rm -f state.json
-          cat > start_anchor.py << 'PYEOF'
-import sys
-import traceback
+          python3 -c "
+import sys, traceback
 try:
     import main
     import uvicorn
@@ -67,7 +66,7 @@ try:
 except Exception as e:
     traceback.print_exc()
     sys.exit(1)
-PYEOF
+" > start_anchor.py
           FCS_AGG_INTERVAL_S=5 nohup python -u start_anchor.py > anchor.log 2>&1 &
           ANCHOR_PID=$!
           sleep 3
@@ -141,9 +140,8 @@ PYEOF
       - name: Start Anchor (fast aggregation interval)
         run: |
           rm -f state.json
-          cat > start_anchor.py << 'PYEOF'
-import sys
-import traceback
+          python3 -c "
+import sys, traceback
 try:
     import main
     import uvicorn
@@ -151,7 +149,7 @@ try:
 except Exception as e:
     traceback.print_exc()
     sys.exit(1)
-PYEOF
+" > start_anchor.py
           FCS_AGG_INTERVAL_S=5 nohup python -u start_anchor.py > anchor.log 2>&1 &
           ANCHOR_PID=$!
           sleep 5
