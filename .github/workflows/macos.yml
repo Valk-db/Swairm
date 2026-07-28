@@ -56,29 +56,9 @@ jobs:
 
       - name: Start Anchor (fast aggregation interval)
         run: |
-          rm -f state.json
-          python3 -c "
-import sys, traceback
-try:
-    import main
-    import uvicorn
-    uvicorn.run(main.app, host='127.0.0.1', port=8000, log_level='debug')
-except Exception as e:
-    traceback.print_exc()
-    sys.exit(1)
-" > start_anchor.py
-          FCS_AGG_INTERVAL_S=5 nohup python -u start_anchor.py > anchor.log 2>&1 &
-          ANCHOR_PID=$!
+          FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
           sleep 3
-          if ! curl -sf http://127.0.0.1:8000/status; then
-            echo "=== Anchor process status ==="
-            ps aux | grep uvicorn || echo "uvicorn not running"
-            echo "=== Anchor log ==="
-            cat anchor.log
-            echo "=== Killing anchor ==="
-            kill $ANCHOR_PID 2>/dev/null || true
-            exit 1
-          fi
+          curl -sf http://127.0.0.1:8000/status
 
       - name: Run Swift fleet against the Anchor
         run: swift run swairm-client --anchor http://127.0.0.1:8000 --fleet 1 --rounds 1 --interval 8
@@ -140,19 +120,9 @@ except Exception as e:
       - name: Start Anchor (fast aggregation interval)
         run: |
           rm -f state.json
-          python3 -c "
-import sys, traceback
-try:
-    import main
-    import uvicorn
-    uvicorn.run(main.app, host='127.0.0.1', port=8000, log_level='debug')
-except Exception as e:
-    traceback.print_exc()
-    sys.exit(1)
-" > start_anchor.py
-          FCS_AGG_INTERVAL_S=5 nohup python -u start_anchor.py > anchor.log 2>&1 &
+          FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
           ANCHOR_PID=$!
-          sleep 5
+          sleep 3
           if ! curl -sf http://127.0.0.1:8000/status; then
             echo "=== Anchor process status ==="
             ps aux | grep uvicorn || echo "uvicorn not running"
