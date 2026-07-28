@@ -250,10 +250,11 @@ public actor MLXTrainer: LocalTraining {
                 from: modelDirectory,
                 using: LocalTokenizerLoader()
             )
-            // ModelContext.model is non-sendable; access it without crossing
-            // the isolation boundary. The forced cast is also redundant since
-            // ModelContext.model is already typed as any LanguageModel.
             self.model = context.model
+            // Guard: model was just set above, should never be nil here
+            guard let loadedModel = self.model else {
+                throw TrainingError.ambiguousAdapterConfig("Model failed to load")
+            }
 
             // LoRAContainer.from matches `keys` by EXACT equality against
             // Module.namedModules() paths, not by suffix/substring -- despite
@@ -268,7 +269,7 @@ public actor MLXTrainer: LocalTraining {
             // mlp) is what actually gets adapted, and fail fast with a clear
             // error if a future base model's module names don't match any of
             // targetModules, instead of the opaque MLX-side trap.
-            let availableKeys = (self.model as? LoRAModel)?.loraDefaultKeys ?? []
+            let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
             var resolvedKeys: [String]? = nil
             if !config.targetModules.isEmpty {
                 let matched = availableKeys.filter { key in
