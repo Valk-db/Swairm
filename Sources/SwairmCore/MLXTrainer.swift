@@ -250,8 +250,10 @@ public actor MLXTrainer: LocalTraining {
                 from: modelDirectory,
                 using: LocalTokenizerLoader()
             )
-            let loadedModel: any LanguageModel = try context.model as! any LanguageModel
-            self.model = loadedModel
+            // ModelContext.model is non-sendable; access it without crossing
+            // the isolation boundary. The forced cast is also redundant since
+            // ModelContext.model is already typed as any LanguageModel.
+            self.model = context.model
 
             // LoRAContainer.from matches `keys` by EXACT equality against
             // Module.namedModules() paths, not by suffix/substring -- despite
@@ -266,7 +268,7 @@ public actor MLXTrainer: LocalTraining {
             // mlp) is what actually gets adapted, and fail fast with a clear
             // error if a future base model's module names don't match any of
             // targetModules, instead of the opaque MLX-side trap.
-            let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
+            let availableKeys = (self.model as? LoRAModel)?.loraDefaultKeys ?? []
             var resolvedKeys: [String]? = nil
             if !config.targetModules.isEmpty {
                 let matched = availableKeys.filter { key in
@@ -292,7 +294,7 @@ public actor MLXTrainer: LocalTraining {
             // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
             // true layer count adapts all blocks. Falls back to all layers when
             // the model doesn't report a LoRAModel layer list.
-            let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
+            let numLayers = (self.model as? LoRAModel)?.loraLayers.count ?? 0
 
             // Create LoRAConfiguration for DoRA
             let loraConfig = LoRAConfiguration(
@@ -307,7 +309,7 @@ public actor MLXTrainer: LocalTraining {
 
             // Inject DoRA layers using MLX's LoRAContainer
             self.loraContainer = try LoRAContainer.from(
-                model: loadedModel,
+                model: self.model,
                 configuration: loraConfig
             )
 
