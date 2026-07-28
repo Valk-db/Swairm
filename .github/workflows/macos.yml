@@ -120,7 +120,7 @@ jobs:
       - name: Start Anchor (fast aggregation interval)
         run: |
           rm -f state.json
-          FCS_AGG_INTERVAL_S=5 nohup python -u -c "
+          cat > start_anchor.py << 'EOF'
 import sys
 import traceback
 try:
@@ -130,7 +130,8 @@ try:
 except Exception as e:
     traceback.print_exc()
     sys.exit(1)
-" > anchor.log 2>&1 &
+EOF
+          FCS_AGG_INTERVAL_S=5 nohup python -u start_anchor.py > anchor.log 2>&1 &
           ANCHOR_PID=$!
           sleep 5
           if ! curl -sf http://127.0.0.1:8000/status; then
