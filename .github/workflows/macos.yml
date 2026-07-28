@@ -120,9 +120,19 @@ jobs:
       - name: Start Anchor (fast aggregation interval)
         run: |
           rm -f state.json
-          FCS_AGG_INTERVAL_S=5 nohup uvicorn main:app --host 127.0.0.1 --port 8000 > anchor.log 2>&1 &
+          FCS_AGG_INTERVAL_S=5 nohup python -u -c "
+import sys
+import traceback
+try:
+    import main
+    import uvicorn
+    uvicorn.run(main.app, host='127.0.0.1', port=8000, log_level='debug')
+except Exception as e:
+    traceback.print_exc()
+    sys.exit(1)
+" > anchor.log 2>&1 &
           ANCHOR_PID=$!
-          sleep 3
+          sleep 5
           if ! curl -sf http://127.0.0.1:8000/status; then
             echo "=== Anchor process status ==="
             ps aux | grep uvicorn || echo "uvicorn not running"
