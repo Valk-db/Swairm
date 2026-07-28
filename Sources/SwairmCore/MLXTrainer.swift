@@ -3,7 +3,7 @@ import MLX
 import MLXNN
 import MLXOptimizers
 import MLXLinalg
-import MLXLMCommon
+@preconcurrency import MLXLMCommon
 import MLXLLM
 import Tokenizers
 
