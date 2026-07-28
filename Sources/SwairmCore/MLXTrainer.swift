@@ -250,7 +250,7 @@ public actor MLXTrainer: LocalTraining {
                 from: modelDirectory,
                 using: LocalTokenizerLoader()
             )
-            let loadedModel = context.model as any LanguageModel
+            let loadedModel: any LanguageModel = try context.model as! any LanguageModel
             self.model = loadedModel
 
             // LoRAContainer.from matches `keys` by EXACT equality against
