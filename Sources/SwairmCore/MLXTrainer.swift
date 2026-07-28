@@ -295,7 +295,7 @@ public actor MLXTrainer: LocalTraining {
             // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
             // true layer count adapts all blocks. Falls back to all layers when
             // the model doesn't report a LoRAModel layer list.
-            let numLayers = (self.model as? LoRAModel)?.loraLayers.count ?? 0
+            let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
 
             // Create LoRAConfiguration for DoRA
             let loraConfig = LoRAConfiguration(
@@ -310,7 +310,7 @@ public actor MLXTrainer: LocalTraining {
 
             // Inject DoRA layers using MLX's LoRAContainer
             self.loraContainer = try LoRAContainer.from(
-                model: self.model,
+                model: loadedModel,
                 configuration: loraConfig
             )
 
