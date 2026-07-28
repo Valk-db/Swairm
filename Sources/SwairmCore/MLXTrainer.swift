@@ -240,19 +240,17 @@ public actor MLXTrainer: LocalTraining {
         if model == nil {
             // Load base model from local directory via MLXLMCommon
             let modelDirectory = URL(fileURLWithPath: config.modelPath)
-            let loadedModel: any LanguageModel = try await { @Sendable () -> any LanguageModel in
-                // Use LLMModelFactory directly rather than the free-function
-                // MLXLMCommon loadModel: the latter resolves a factory through the
-                // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
-                // throws noModelFactoryAvailable when the MLXLLM ObjC class isn't
-                // realized yet. Calling the concrete factory's own load(from:using:)
-                // bypasses the registry entirely.
-                let context = try await LLMModelFactory.shared.load(
-                    from: modelDirectory,
-                    using: LocalTokenizerLoader()
-                )
-                return context.model
-            }() as any LanguageModel
+            // Use LLMModelFactory directly rather than the free-function
+            // MLXLMCommon loadModel: the latter resolves a factory through the
+            // ModelFactoryRegistry trampoline (NSClassFromString lookup), which
+            // throws noModelFactoryAvailable when the MLXLLM ObjC class isn't
+            // realized yet. Calling the concrete factory's own load(from:using:)
+            // bypasses the registry entirely.
+            let context = try await LLMModelFactory.shared.load(
+                from: modelDirectory,
+                using: LocalTokenizerLoader()
+            )
+            let loadedModel = context.model as any LanguageModel
             self.model = loadedModel
 
             // LoRAContainer.from matches `keys` by EXACT equality against
