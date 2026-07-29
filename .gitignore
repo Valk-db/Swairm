@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 venv/
 .env
-.perm
+.pem
 # Project Specific Data & Artifacts
 data/
 models/
