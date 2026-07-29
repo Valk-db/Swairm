@@ -21,11 +21,12 @@ final class MLXDeviceLoopController {
     // Matches CI's local_dir naming (mlx-e2e job) -- copy the same
     // mlx-community/Qwen3-0.6B-bf16 files into Documents/mlx-model via
     // Files app to reuse the exact model this default expects.
+    // DEFAULTS MATCH CI (mlx-e2e): batch=1, seq=64, steps=1 to fit iPhone 12 Pro Max 6GB RAM.
     var modelPath = "mlx-model"
     var curriculumDirectory = "curriculum"
-    var maxStepsPerRound = 60
-    var batchSize = 2
-    var sequenceLength = 128
+    var maxStepsPerRound = 1
+    var batchSize = 1
+    var sequenceLength = 64
     var learningRate: Float = 1e-4
 
     // Base model to download from Anchor (e.g., "Qwen3-0.6B-bf16")

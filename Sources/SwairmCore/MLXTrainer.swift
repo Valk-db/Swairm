@@ -113,9 +113,9 @@ public struct MLXTrainerConfig: Sendable {
         weightDecay: Float = 0.01,
         maxGradNorm: Float = 1.0,
         warmupSteps: Int = 10,
-        maxStepsPerRound: Int = 60,
-        batchSize: Int = 2,
-        sequenceLength: Int = 128,
+        maxStepsPerRound: Int = 1,
+        batchSize: Int = 1,
+        sequenceLength: Int = 64,
         curriculumDirectory: String? = nil,
         seed: UInt64 = 42
     ) {
