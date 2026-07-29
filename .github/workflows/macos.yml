@@ -218,7 +218,7 @@ jobs:
           swift run swairm-mlx-client \
             --anchor http://127.0.0.1:8000 \
             --model models/mlx-model \
-            --curriculum curriculum \
+            --curriculum curriculum/epoch_0 \
             --fleet 1 \
             --rounds 1 \
             --max-steps 1 \
