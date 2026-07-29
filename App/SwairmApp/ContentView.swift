@@ -8,7 +8,7 @@ struct ContentView: View {
     @State private var bgScheduler = BackgroundTaskScheduler.shared
 
     // Shared state properties that both controllers expose
-    @State private var anchorURLText = "http://192.168.1.100:8000"
+    @State private var anchorURLText = "http://172.20.10.10:8000"
     @State private var deviceIndex = 0
     @State private var intervalSeconds = 25.0
 

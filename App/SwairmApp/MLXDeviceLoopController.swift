@@ -12,7 +12,7 @@ import SwairmCore
 @Observable
 final class MLXDeviceLoopController {
     // ------------------------------------------------------------ config
-    var anchorURLText = "http://192.168.1.100:8000"
+    var anchorURLText = "http://172.20.10.10:8000"
     var deviceIndex = 0
     /// Seconds to wait between rounds (mirrors the CLI --interval flag).
     var intervalSeconds = 25.0
