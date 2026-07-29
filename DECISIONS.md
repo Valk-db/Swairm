@@ -195,7 +195,20 @@ All four CI jobs (build-test, integration, sideload-ipa, mlx-e2e) green as of HE
   consider vDSP_vfloat2half/vhalf2float with runtime availability checks
   when targeting iOS 18+ (where they may be available on-device).
 
-## Cross-Platform Decentralized AI Standard — Open Items (NEW)
+## D17. Swift 6 Sendable fix: nonisolated helper returns @unchecked Sendable wrapper (2026-07-29)
+**Problem:** `MLXTrainer` actor's `prepare()` method calls `LLMModelFactory.shared.load()` which returns `ModelContext` (non-Sendable) containing a `LanguageModel` (also non-Sendable). Swift 6 strict concurrency warns: "non-sendable result type cannot be sent from nonisolated context" at the call site inside the actor.
+
+**Solution:** Added fileprivate `nonisolated static func loadModel()` helper that runs outside actor isolation, loads the model, extracts the `LanguageModel`, and returns it wrapped in a fileprivate `_UncheckedSendable<Wrapped>` struct marked `@unchecked Sendable`. The actor then unwraps `.value` and stores it — actor isolation protects the model after assignment.
+
+```swift
+fileprivate nonisolated static func loadModel(...) async throws -> _UncheckedSendable<any LanguageModel> {
+    let context = try await LLMModelFactory.shared.load(from: directory, using: loader)
+    return _UncheckedSendable(value: context.model)
+}
+fileprivate struct _UncheckedSendable<Wrapped>: @unchecked Sendable { let value: Wrapped }
+```
+
+**Evidence:** CI build-test (30468709771) passes with **zero Swift compiler warnings**. All 4 jobs green (build-test, integration, sideload-ipa, mlx-e2e).
 
 ### Transport & Runtime
 - **TLS termination strategy**: First-class TLS in Anchor (auto-cert via Let's Encrypt/ACME) vs reverse-proxy (nginx/Caddy). Required for any non-localhost deployment.

@@ -46,7 +46,8 @@ MLXTrainer.swift: Fixed compilation bugs (3 bugs + throws signature):
 - Line 391: Added `try` at call site
 All fixes verified by green build-test CI.
 
-**Recent fixes (2026-07-26):**
+**Recent fixes (2026-07-29):**
+- MLXTrainer.swift: Fixed Swift 6 Sendable warnings — nonisolated static `loadModel()` helper now returns model wrapped in `@unchecked Sendable` fileprivate struct, silencing "non-sendable result cannot cross actor boundary" warnings at call sites (line 254). All 4 CI jobs pass with zero Swift compiler warnings.
 - Math.swift: Fixed LAPACK segfault by correcting column-major layout handling in qrOrthoColumns() and svdEconomy() — fixed m32/n32/lda/ldu/ldvt parameters, added lwork guards against negative workspace queries, removed unused variables (_yT, superb, yTData made let, rows/cols in transposed() made let)
 - NPY.swift: Removed vDSP vfloat2half/vhalf2float platform-dependent calls; switched Float16Codec to scalar fallback on all platforms (eliminates iOS SDK build failure on macOS runners)
 - MLXTrainer.swift: Fixed Sendable conformance (@unchecked Sendable in extension, not on protocol), .noUnusedKeys unqualified, optional unwrapping in checkpoint functions, MLX.DType.float32 fully qualified
