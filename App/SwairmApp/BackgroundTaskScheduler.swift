@@ -367,9 +367,7 @@ final class BackgroundTaskScheduler {
                 guard let modelPath = config.modelPath, !modelPath.isEmpty else {
                     throw BackgroundSchedulerError.missingModelPath
                 }
-                guard let curriculumDir = config.curriculumDirectory, !curriculumDir.isEmpty else {
-                    throw BackgroundSchedulerError.missingCurriculumDirectory
-                }
+                // Curriculum directory is now resolved automatically to curriculum/epoch_{epoch}
 
                 let loop = try MLXDeviceLoop(
                     anchor: anchor,
@@ -387,7 +385,7 @@ final class BackgroundTaskScheduler {
                         maxStepsPerRound: config.maxStepsPerRound,
                         batchSize: config.batchSize,
                         sequenceLength: config.sequenceLength,
-                        curriculumDirectory: resolvedInDocuments(curriculumDir),
+                        curriculumDirectory: resolvedInDocuments("curriculum/epoch_\(config.deviceIndex)"),
                         seed: 42 + UInt64(config.deviceIndex)
                     )
                 )
