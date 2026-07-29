@@ -237,7 +237,9 @@ public actor MLXTrainer: LocalTraining {
     /// overwrites parameter VALUES in place, which is all D7's "full
     /// replace semantics" requires; it never needed the container rebuilt.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
+        appendLog("prepare: start")
         if model == nil {
+            appendLog("prepare: loading base model from \(config.modelPath)")
             // Load base model from local directory via MLXLMCommon
             let modelDirectory = URL(fileURLWithPath: config.modelPath)
             // Use LLMModelFactory directly rather than the free-function
@@ -261,6 +263,7 @@ public actor MLXTrainer: LocalTraining {
             guard let loadedModel = self.model else {
                 throw TrainingError.ambiguousAdapterConfig("Model failed to load")
             }
+            appendLog("prepare: base model loaded")
 
             // LoRAContainer.from matches `keys` by EXACT equality against
             // Module.namedModules() paths, not by suffix/substring -- despite
@@ -276,6 +279,7 @@ public actor MLXTrainer: LocalTraining {
             // error if a future base model's module names don't match any of
             // targetModules, instead of the opaque MLX-side trap.
             let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
+            appendLog("prepare: availableKeys=\(availableKeys)")
             var resolvedKeys: [String]? = nil
             if !config.targetModules.isEmpty {
                 let matched = availableKeys.filter { key in
@@ -289,6 +293,7 @@ public actor MLXTrainer: LocalTraining {
                 }
                 resolvedKeys = matched
             }
+            appendLog("prepare: resolvedKeys=\(resolvedKeys ?? [])")
 
             // Single rank/scale for the container (see resolvedRankScale): throws
             // rather than silently collapsing a heterogeneous rankMap to its max.
@@ -296,12 +301,14 @@ public actor MLXTrainer: LocalTraining {
             // targetModules patterns), so the "attn"/"mlp" substring matching in
             // rank(for:)/alpha(for:) has real qualified names to match against.
             let (rank, scale) = try config.resolvedRankScale(forKeys: resolvedKeys ?? config.targetModules)
+            appendLog("prepare: rank=\(rank) scale=\(scale)")
 
             // Adapt every transformer block the model exposes, not a hardcoded
             // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
             // true layer count adapts all blocks. Falls back to all layers when
             // the model doesn't report a LoRAModel layer list.
             let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
+            appendLog("prepare: numLayers=\(numLayers)")
 
             // Create LoRAConfiguration for DoRA
             let loraConfig = LoRAConfiguration(
@@ -315,10 +322,12 @@ public actor MLXTrainer: LocalTraining {
             )
 
             // Inject DoRA layers using MLX's LoRAContainer
+            appendLog("prepare: injecting LoRA...")
             self.loraContainer = try LoRAContainer.from(
                 model: loadedModel,
                 configuration: loraConfig
             )
+            appendLog("prepare: LoRA injected")
 
             // Explicitly load the container into the model to ensure trainable
             // parameters (LoRA adapters) are tracked by the model. LoRAContainer.from
@@ -374,6 +383,7 @@ public actor MLXTrainer: LocalTraining {
 
         var batchIterator = batches.makeAsyncIterator()
 
+        appendLog("train: starting loop, maxSteps=\(config.maxStepsPerRound)")
         while stepsCompleted < config.maxStepsPerRound && stepsCompleted < budget.maxSteps {
             // Check budget
             let elapsed = Date().timeIntervalSince(startTime)
@@ -403,8 +413,10 @@ public actor MLXTrainer: LocalTraining {
                 continue
             }
 
+            appendLog("train: step \(stepsCompleted) input shape=\(inputIds.shape)")
             // Forward + backward pass
             let (loss, grads) = try await forwardBackward(inputIds: inputIds, labels: labels)
+            appendLog("train: step \(stepsCompleted) loss=\(loss)")
 
             // Gradient clipping by global norm (MLXOptimizers.AdamW does NOT clip internally)
             var clippedGrads = grads
@@ -424,6 +436,7 @@ public actor MLXTrainer: LocalTraining {
 
             // Apply gradients via optimizer
             if let optimizer = optimizer, let validGrads = clippedGrads {
+                appendLog("train: step \(stepsCompleted) optimizer.update")
                 optimizer.update(model: model!, gradients: validGrads)
             }
 
@@ -461,6 +474,7 @@ public actor MLXTrainer: LocalTraining {
             throw TrainingError.noAdapter
         }
 
+        appendLog("exportAdapter: container.parameters=\(container.parameters.flattened().count)")
         var modules: [String: AdapterModule] = [:]
 
         // Group parameters by layer name
@@ -502,6 +516,7 @@ public actor MLXTrainer: LocalTraining {
             modules[name] = AdapterModule(A: aMatrix, B: bMatrix, m: mFloatArray)
         }
 
+        appendLog("exportAdapter: returning \(modules.count) modules")
         return modules
     }
 
@@ -524,13 +539,16 @@ public actor MLXTrainer: LocalTraining {
             mlxParams["\(name).m"] = MLXArray(adapterMod.m, [adapterMod.m.count])
         }
 
+        appendLog("applyGlobalAdapter: applying \(global.modules.count) modules")
         let params = ModuleParameters.unflattened(mlxParams)
         try model?.update(parameters: params, verify: .noUnusedKeys)
+        appendLog("applyGlobalAdapter: done")
     }
 
     private func forwardBackward(inputIds: MLXArray, labels: MLXArray) async throws -> (Float, ModuleParameters?) {
         guard let model = model else { throw TrainingError.notPrepared }
 
+        appendLog("forwardBackward: inputIds=\(inputIds.shape) labels=\(labels.shape)")
         // valueAndGrad closure must take (model, input, labels) and return loss
         // Pass model as explicit argument to avoid capturing the `var model` reference
         func inner(parameters: ModuleParameters, arrays: [MLXArray]) -> [MLXArray] {

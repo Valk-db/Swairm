@@ -131,7 +131,7 @@ jobs:
             --vocab 32000 \
             --sequences 512 \
             --seq-len 64 \
-            --out curriculum
+            --out curriculum/epoch_0
 
       - name: Start Anchor (fast aggregation interval)
         run: |

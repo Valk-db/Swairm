@@ -6,6 +6,9 @@
 // CurriculumLoader, never fully resident in memory.
 
 import Foundation
+import os.log
+
+private let loopLog = OSLog(subsystem: "com.swairm.app", category: "MLXDeviceLoop")
 
 /// Resolve a relative path to the Documents directory on iOS/macOS.
 /// Leaves absolute paths (starting with "/") unchanged.
@@ -13,6 +16,12 @@ private func resolveInDocuments(_ path: String) -> String {
     guard !path.isEmpty, !path.hasPrefix("/") else { return path }
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     return docs.appendingPathComponent(path).path
+}
+
+/// Log to both os_log and Swift print for debugging
+private func log(_ message: String, level: OSLogType = .default) {
+    os_log("%{public}@", log: loopLog, type: level, message)
+    print("[MLXDeviceLoop] \(message)")
 }
 
 // ============================================================================
@@ -156,37 +165,56 @@ public actor MLXDeviceLoop {
         let round = roundsRun
         roundsRun += 1
 
-        // Load checkpoint if resuming from interruption
-        try await loadCheckpoint()
+        log("runRound \(round) starting")
 
+        // Load checkpoint if resuming from interruption
+        log("Loading checkpoint...")
+        try await loadCheckpoint()
+        log("Checkpoint loaded")
+
+        log("Fetching anchor status...")
         let status = try await anchor.status()
+        log("Anchor status: version=\(status.version)")
+
+        log("Fetching latest adapter...")
         let globalAdapter = try await anchor.latestAdapter()
         let fetchedVersion = globalAdapter?.version ?? 0
+        log("Fetched adapter: version=\(fetchedVersion)")
 
         // Prepare trainer with global adapter (or fresh if nil)
         // If we loaded a checkpoint, prepare() will re-apply the global adapter on top
+        log("Preparing trainer with global adapter...")
         try await trainer.prepare(globalAdapter: globalAdapter)
+        log("Trainer prepared")
 
         // Get curriculum batch stream - resolve path to Documents on iOS
         let resolvedCurriculumPath = resolveInDocuments(config.curriculumDirectory)
+        log("Curriculum path: \(resolvedCurriculumPath)")
         guard !config.curriculumDirectory.isEmpty else {
             throw MLXLoopError.noCurriculumDirectory
         }
+        log("Creating CurriculumLoader...")
         let curriculumLoader = try CurriculumLoader(
             directory: URL(fileURLWithPath: resolvedCurriculumPath),
             batchSize: config.batchSize,
             sequenceLength: config.sequenceLength
         )
+        log("CurriculumLoader created, shards: \(curriculumLoader.shardFiles.count)")
 
         let batchStream = curriculumLoader.batches()
+        log("Starting training...")
 
         // Train on curriculum batches
         let report = try await trainer.train(batches: batchStream, budget: budget)
+        log("Training done: steps=\(report.stepsCompleted) loss=\(report.finalLoss ?? -1) term=\(report.termination)")
 
         // Export full adapter state (D7: replace semantics)
+        log("Exporting adapter...")
         let modules = try await trainer.exportAdapter()
+        log("Adapter exported: \(modules.count) modules")
 
         // Upload to Anchor
+        log("Uploading to anchor...")
         let payload = AdapterUploadPayload(
             deviceID: deviceID,
             fetchVersion: fetchedVersion,
@@ -194,9 +222,12 @@ public actor MLXDeviceLoop {
             modules: modules
         )
         let receipt = try await anchor.upload(payload)
+        log("Upload done: receipt=\(receipt.accepted)")
 
         // Save checkpoint after successful round
+        log("Saving checkpoint...")
         try await saveCheckpoint()
+        log("Checkpoint saved")
 
         return MLXRoundResult(
             round: round,
