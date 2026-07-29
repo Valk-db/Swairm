@@ -45,7 +45,7 @@ final class DeviceLoopController {
         UIDevice.current.isBatteryMonitoringEnabled = true
         let anchor = AnchorClient(base: url)
         let deviceID = deviceID
-        let batteryFractionProvider: @Sendable () -> Float? = {
+        let batteryFractionProvider: @Sendable () -> Float? = { @MainActor in
             let level = UIDevice.current.batteryLevel
             return level >= 0 ? level : nil
         }

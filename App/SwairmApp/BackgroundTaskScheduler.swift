@@ -176,7 +176,7 @@ final class BackgroundTaskScheduler {
     /// Run a background round immediately (for testing from UI).
     func runBackgroundRoundNow() async {
         guard !isBackgroundTaskRunning else { return }
-        guard let anchorURL = URL(string: config.anchorURL) else {
+        guard URL(string: config.anchorURL) != nil else {
             lastError = "Invalid Anchor URL: \(config.anchorURL)"
             return
         }
@@ -346,7 +346,7 @@ final class BackgroundTaskScheduler {
         }
 
         let deviceID = "bg-phone\(config.deviceIndex)"
-        let startTime = Date()
+        // let startTime = Date()  // not used
 
         let budget = ResourceBudget(
             maxSteps: config.maxStepsPerRound,
@@ -401,7 +401,7 @@ final class BackgroundTaskScheduler {
 
             } else {
                 // Proxy mode - linear proxy training
-                let batteryFractionProvider: @Sendable () -> Float? = {
+                let batteryFractionProvider: @Sendable () -> Float? = { @MainActor in
                     let level = UIDevice.current.batteryLevel
                     return level >= 0 ? level : nil
                 }

@@ -246,11 +246,16 @@ public actor MLXTrainer: LocalTraining {
             // throws noModelFactoryAvailable when the MLXLLM ObjC class isn't
             // realized yet. Calling the concrete factory's own load(from:using:)
             // bypasses the registry entirely.
-            let context = try await LLMModelFactory.shared.load(
+            //
+            // Load in a nonisolated context to avoid Swift 6 Sendable warning:
+            // ModelContext is non-sendable but we only need the model (also
+            // non-sendable, protected by actor isolation). The helper runs
+            // outside actor isolation and returns just the model.
+            let loadedModel = try await MLXTrainer.loadModel(
                 from: modelDirectory,
                 using: LocalTokenizerLoader()
             )
-            self.model = context.model
+            self.model = loadedModel
             // Guard: model was just set above, should never be nil here
             guard let loadedModel = self.model else {
                 throw TrainingError.ambiguousAdapterConfig("Model failed to load")
@@ -579,6 +584,22 @@ public actor MLXTrainer: LocalTraining {
 
     private func mlxArrayToFloatArray(_ array: MLXArray) throws -> [Float] {
         return array.flattened().asType(MLX.DType.float32).asArray(Float.self)
+    }
+
+    // Nonisolated helper to load model outside actor isolation.
+    // ModelContext is non-sendable but we only extract the model (also
+    // non-sendable, protected by actor isolation once stored). This avoids
+    // the Swift 6 "non-sendable result type cannot be sent from nonisolated
+    // context" warning on the LLMModelFactory.load call inside the actor.
+    nonisolated static func loadModel(
+        from directory: URL,
+        using loader: LocalTokenizerLoader
+    ) async throws -> any LanguageModel {
+        let context = try await LLMModelFactory.shared.load(
+            from: directory,
+            using: loader
+        )
+        return context.model
     }
 }
 
