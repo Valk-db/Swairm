@@ -10,6 +10,7 @@ data/
 models/
 queue/
 state.json
+certs/
 
 # IDE / OS Specific
 .vscode/
