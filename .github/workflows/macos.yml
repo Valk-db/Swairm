@@ -133,6 +133,12 @@ jobs:
             --seq-len 64 \
             --out curriculum/epoch_0
 
+      - name: Copy curriculum to Documents (MLXDeviceLoop resolves to Documents)
+        run: |
+          mkdir -p ~/Documents/curriculum
+          cp -R curriculum/epoch_0 ~/Documents/curriculum/
+          ls -la ~/Documents/curriculum/epoch_0
+
       - name: Start Anchor (fast aggregation interval)
         run: |
           rm -f state.json
