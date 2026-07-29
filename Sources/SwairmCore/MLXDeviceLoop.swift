@@ -7,6 +7,14 @@
 
 import Foundation
 
+/// Resolve a relative path to the Documents directory on iOS/macOS.
+/// Leaves absolute paths (starting with "/") unchanged.
+private func resolveInDocuments(_ path: String) -> String {
+    guard !path.isEmpty, !path.hasPrefix("/") else { return path }
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    return docs.appendingPathComponent(path).path
+}
+
 // ============================================================================
 // MARK: - Config & Results
 // ============================================================================
@@ -159,15 +167,16 @@ public actor MLXDeviceLoop {
         // If we loaded a checkpoint, prepare() will re-apply the global adapter on top
         try await trainer.prepare(globalAdapter: globalAdapter)
 
-        // Get curriculum batch stream
-        guard let curriculumLoader = config.curriculumDirectory.isEmpty ? nil :
-              try CurriculumLoader(
-                  directory: URL(fileURLWithPath: config.curriculumDirectory),
-                  batchSize: config.batchSize,
-                  sequenceLength: config.sequenceLength
-              ) else {
+        // Get curriculum batch stream - resolve path to Documents on iOS
+        let resolvedCurriculumPath = resolveInDocuments(config.curriculumDirectory)
+        guard !config.curriculumDirectory.isEmpty else {
             throw MLXLoopError.noCurriculumDirectory
         }
+        let curriculumLoader = try CurriculumLoader(
+            directory: URL(fileURLWithPath: resolvedCurriculumPath),
+            batchSize: config.batchSize,
+            sequenceLength: config.sequenceLength
+        )
 
         let batchStream = curriculumLoader.batches()
 
