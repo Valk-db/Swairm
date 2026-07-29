@@ -29,8 +29,8 @@ final class MLXDeviceLoopController {
     var sequenceLength = 64
     var learningRate: Float = 1e-4
 
-    // Base model to download from Anchor (e.g., "Qwen3-0.6B-bf16")
-    var baseModelName = "Qwen3-0.6B-bf16"
+    // Base model to download from Anchor (e.g., "Qwen3-0.6B-8bit")
+    var baseModelName = "Qwen3-0.6B-8bit"
 
     // Curriculum epoch to download
     var curriculumEpoch = 0
