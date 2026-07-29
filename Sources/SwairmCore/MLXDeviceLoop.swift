@@ -222,7 +222,7 @@ public actor MLXDeviceLoop {
             modules: modules
         )
         let receipt = try await anchor.upload(payload)
-        log("Upload done: receipt=\(receipt.accepted)")
+        log("Upload done: receipt=\(receipt.queuedID)")
 
         // Save checkpoint after successful round
         log("Saving checkpoint...")

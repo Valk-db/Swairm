@@ -15,7 +15,7 @@ public struct CurriculumLoader: Sendable {
     public let directory: URL
     public let batchSize: Int
     public let sequenceLength: Int
-    private let shardFiles: [URL]
+    public let shardFiles: [URL]
 
     public init(directory: URL, batchSize: Int, sequenceLength: Int) throws {
         self.directory = directory
