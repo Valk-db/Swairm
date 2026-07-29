@@ -139,8 +139,8 @@ async def _prepare_base_model(model_name: str) -> None:
     """
     Download and prepare a base MLX model from HuggingFace.
 
-    Downloads the mlx-community/{model_name} model, converts to MLX format if needed,
-    and saves to BASE_MODEL_DIR/{model_name}/.
+    Downloads the mlx-community/{model_name} model (already in MLX/safetensors format)
+    and saves to BASE_MODEL_DIR/{model_name}/. No conversion needed on any platform.
     """
     import hashlib
     import json
@@ -149,12 +149,9 @@ async def _prepare_base_model(model_name: str) -> None:
 
     try:
         from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
-        from mlx_lm.convert import convert  # type: ignore[import-not-found]
-        MLX_LM_AVAILABLE = True
     except ImportError:
-        MLX_LM_AVAILABLE = False
-        print(f"[base_model] Warning: mlx_lm not available, cannot convert {model_name}")
-        raise RuntimeError("mlx_lm not available for model conversion")
+        print(f"[base_model] Error: huggingface_hub not available")
+        raise RuntimeError("huggingface_hub not available for model download")
 
     model_dir = BASE_MODEL_DIR / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -166,11 +163,9 @@ async def _prepare_base_model(model_name: str) -> None:
         local_path = snapshot_download(repo_id=hf_repo)
         source_dir = Path(local_path)
 
-        if MLX_LM_AVAILABLE:
-            print(f"[base_model] Converting {model_name} to MLX format...")
-            convert(str(source_dir), str(model_dir))
-        else:
-            shutil.copytree(source_dir, model_dir, dirs_exist_ok=True)
+        # mlx-community models are already in MLX format (safetensors) - just copy
+        print(f"[base_model] Copying model files (no conversion needed)...")
+        shutil.copytree(source_dir, model_dir, dirs_exist_ok=True)
 
         # Generate manifest
         expected_files = [
