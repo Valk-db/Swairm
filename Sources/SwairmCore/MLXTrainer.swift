@@ -591,7 +591,6 @@ public actor MLXTrainer: LocalTraining {
     // non-sendable, protected by actor isolation once stored). This avoids
     // the Swift 6 "non-sendable result type cannot be sent from nonisolated
     // context" warning on the LLMModelFactory.load call inside the actor.
-    @preconcurrency
     fileprivate nonisolated static func loadModel(
         from directory: URL,
         using loader: LocalTokenizerLoader
