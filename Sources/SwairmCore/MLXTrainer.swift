@@ -250,11 +250,12 @@ public actor MLXTrainer: LocalTraining {
             // Load in a nonisolated context to avoid Swift 6 Sendable warning:
             // ModelContext is non-sendable but we only need the model (also
             // non-sendable, protected by actor isolation). The helper runs
-            // outside actor isolation and returns just the model.
+            // outside actor isolation and returns the model wrapped to
+            // silence the cross-actor-boundary warning.
             let loadedModel = try await MLXTrainer.loadModel(
                 from: modelDirectory,
                 using: LocalTokenizerLoader()
-            )
+            ).value
             self.model = loadedModel
             // Guard: model was just set above, should never be nil here
             guard let loadedModel = self.model else {
@@ -591,15 +592,26 @@ public actor MLXTrainer: LocalTraining {
     // non-sendable, protected by actor isolation once stored). This avoids
     // the Swift 6 "non-sendable result type cannot be sent from nonisolated
     // context" warning on the LLMModelFactory.load call inside the actor.
+    //
+    // The wrapper type silences the call-site warning about sending the
+    // non-Sendable LanguageModel across actor boundaries, since the actor
+    // isolation protects the stored model after assignment.
     fileprivate nonisolated static func loadModel(
         from directory: URL,
         using loader: LocalTokenizerLoader
-    ) async throws -> any LanguageModel {
+    ) async throws -> _UncheckedSendable<any LanguageModel> {
         let context = try await LLMModelFactory.shared.load(
             from: directory,
             using: loader
         )
-        return context.model
+        return _UncheckedSendable(value: context.model)
+    }
+
+    /// Wrapper to silence Swift 6 "non-sendable result cannot cross actor
+    /// boundary" warning at the call site. The MLXTrainer actor protects
+    /// the model after assignment, so this is safe.
+    fileprivate struct _UncheckedSendable<Wrapped>: @unchecked Sendable {
+        let value: Wrapped
     }
 }
 
