@@ -62,6 +62,9 @@ final class MLXDeviceLoopController {
         UIDevice.current.isBatteryMonitoringEnabled = true
         let anchor = AnchorClient(base: url)
 
+        // Resolve curriculum directory to the epoch-specific path that downloadCurriculum() writes to
+        let resolvedCurriculumDir = "curriculum/epoch_\(curriculumEpoch)"
+
         do {
             let loop = try MLXDeviceLoop(
                 anchor: anchor,
@@ -79,7 +82,7 @@ final class MLXDeviceLoopController {
                     maxStepsPerRound: maxStepsPerRound,
                     batchSize: batchSize,
                     sequenceLength: sequenceLength,
-                    curriculumDirectory: resolvedInDocuments(curriculumDirectory),
+                    curriculumDirectory: resolvedInDocuments(resolvedCurriculumDir),
                     seed: 42 + UInt64(deviceIndex)
                 )
             )
