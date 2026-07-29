@@ -45,6 +45,11 @@ public struct BaseModelManifest: Codable, Sendable {
         self.modelName = modelName
         self.files = files
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case modelName = "model_name"
+        case files
+    }
 }
 
 /// Individual base model file metadata
@@ -202,6 +207,14 @@ public struct CurriculumManifest: Codable, Sendable {
         self.sequenceLength = sequenceLength
         self.shards = shards
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case epoch
+        case totalShards = "total_shards"
+        case totalSequences = "total_sequences"
+        case sequenceLength = "sequence_length"
+        case shards
+    }
 }
 
 /// Individual shard metadata
@@ -216,6 +229,13 @@ public struct ShardInfo: Codable, Sendable {
         self.sha256 = sha256
         self.tokenShape = tokenShape
         self.labelShape = labelShape
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case sha256
+        case tokenShape = "token_shape"
+        case labelShape = "label_shape"
     }
 }
 
