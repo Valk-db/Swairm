@@ -11,7 +11,7 @@ import Tokenizers
 
 /// A TokenizerLoader that loads tokenizers from a local directory using AutoTokenizer.
 /// This avoids the need for HuggingFace downloaders and works on iOS 17+.
-private struct LocalTokenizerLoader: TokenizerLoader {
+fileprivate struct LocalTokenizerLoader: TokenizerLoader {
     public init() {}
 
     public func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
@@ -591,7 +591,7 @@ public actor MLXTrainer: LocalTraining {
     // non-sendable, protected by actor isolation once stored). This avoids
     // the Swift 6 "non-sendable result type cannot be sent from nonisolated
     // context" warning on the LLMModelFactory.load call inside the actor.
-    nonisolated static func loadModel(
+    fileprivate nonisolated static func loadModel(
         from directory: URL,
         using loader: LocalTokenizerLoader
     ) async throws -> any LanguageModel {
