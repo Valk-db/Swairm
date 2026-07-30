@@ -47,6 +47,14 @@ struct BackgroundTrainingConfig: Codable, Sendable {
     var batchSize: Int
     var sequenceLength: Int
     var learningRate: Float
+    var weightDecay: Float
+    var maxGradNorm: Float
+    var warmupSteps: Int
+    var targetModules: String
+    var loraRank: Int
+    var loraAlpha: Float
+    var seed: UInt64
+    var curriculumEpoch: Int
     var minBatteryFraction: Float?
     var hmacSecret: Data?
 
@@ -60,12 +68,20 @@ struct BackgroundTrainingConfig: Codable, Sendable {
         deviceIndex: 0,
         intervalSeconds: 15 * 60,  // 15 minutes between background refreshes
         useMLXTrainer: false,
-        modelPath: nil,
-        curriculumDirectory: nil,
+        modelPath: "mlx-model",
+        curriculumDirectory: "curriculum/epoch_0",
         maxStepsPerRound: 1,
-        batchSize: 2,
-        sequenceLength: 128,
+        batchSize: 1,
+        sequenceLength: 64,
         learningRate: 1e-4,
+        weightDecay: 0.01,
+        maxGradNorm: 1.0,
+        warmupSteps: 10,
+        targetModules: "q_proj,v_proj,gate_proj,up_proj,down_proj",
+        loraRank: 6,
+        loraAlpha: 16.0,
+        seed: 42,
+        curriculumEpoch: 0,
         minBatteryFraction: 0.2,
         hmacSecret: nil
     )
@@ -375,18 +391,18 @@ final class BackgroundTaskScheduler {
                     deviceIndex: config.deviceIndex,
                     config: MLXLoopConfig(
                         modelPath: resolvedInDocuments(modelPath),
-                        targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-                        rankMap: ["": 6],
-                        alphaMap: ["": 16.0],
+                        targetModules: config.targetModules.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) },
+                        rankMap: ["": config.loraRank],
+                        alphaMap: ["": config.loraAlpha],
                         learningRate: config.learningRate,
-                        weightDecay: 0.01,
-                        maxGradNorm: 1.0,
-                        warmupSteps: 10,
+                        weightDecay: config.weightDecay,
+                        maxGradNorm: config.maxGradNorm,
+                        warmupSteps: config.warmupSteps,
                         maxStepsPerRound: config.maxStepsPerRound,
                         batchSize: config.batchSize,
                         sequenceLength: config.sequenceLength,
-                        curriculumDirectory: resolvedInDocuments("curriculum/epoch_\(config.deviceIndex)"),
-                        seed: 42 + UInt64(config.deviceIndex)
+                        curriculumDirectory: resolvedInDocuments("curriculum/epoch_\(config.curriculumEpoch)"),
+                        seed: config.seed + UInt64(config.deviceIndex)
                     )
                 )
 

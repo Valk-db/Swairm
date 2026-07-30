@@ -1,5 +1,4 @@
 // Drives one ProxyDeviceLoop against a LAN Anchor from the UI.
-//
 // Owns the run task and republishes round results as log entries. All
 // mutable state lives on the MainActor; the loop itself is an actor, so
 // there is no shared mutable state between the UI and training.
@@ -8,14 +7,30 @@ import SwiftUI
 import UIKit
 import SwairmCore
 
+// Settings persisted via UserDefaults — kept separate from @Observable
+// because the Observation macro doesn't support property wrappers on iOS targets.
+@MainActor
+@Observable
+final class ProxySettings {
+    var anchorURLText: String {
+        get { UserDefaults.standard.string(forKey: "proxy.anchorURLText") ?? "http://172.20.10.5:8000" }
+        set { UserDefaults.standard.set(newValue, forKey: "proxy.anchorURLText") }
+    }
+    var deviceIndex: Int {
+        get { UserDefaults.standard.integer(forKey: "proxy.deviceIndex") }
+        set { UserDefaults.standard.set(newValue, forKey: "proxy.deviceIndex") }
+    }
+    var intervalSeconds: Double {
+        get { UserDefaults.standard.double(forKey: "proxy.intervalSeconds") == 0 ? 25.0 : UserDefaults.standard.double(forKey: "proxy.intervalSeconds") }
+        set { UserDefaults.standard.set(newValue, forKey: "proxy.intervalSeconds") }
+    }
+}
+
 @MainActor
 @Observable
 final class DeviceLoopController {
-    // ------------------------------------------------------------- config (persisted via @AppStorage)
-    @AppStorage("proxy.anchorURLText") var anchorURLText = "http://172.20.10.5:8000"
-    @AppStorage("proxy.deviceIndex") var deviceIndex = 0
-    /// Seconds to wait between rounds (mirrors the CLI --interval flag).
-    @AppStorage("proxy.intervalSeconds") var intervalSeconds = 25.0
+    // ------------------------------------------------------------- config (persisted via ProxySettings)
+    let settings = ProxySettings()
 
     // ------------------------------------------------------------- state
     private(set) var isRunning = false
@@ -32,13 +47,13 @@ final class DeviceLoopController {
         let isError: Bool
     }
 
-    var deviceID: String { "phone\(deviceIndex)" }
+    var deviceID: String { "phone\(settings.deviceIndex)" }
 
     // ------------------------------------------------------------- control
     func start() {
         guard !isRunning else { return }
-        guard let url = URL(string: anchorURLText), url.scheme != nil else {
-            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+        guard let url = URL(string: settings.anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(settings.anchorURLText)", isError: true)
             return
         }
 
@@ -50,13 +65,13 @@ final class DeviceLoopController {
             return level >= 0 ? level : nil
         }
         let loop = ProxyDeviceLoop(
-            anchor: anchor, deviceID: deviceID, deviceIndex: deviceIndex,
+            anchor: anchor, deviceID: deviceID, deviceIndex: settings.deviceIndex,
             batteryFraction: batteryFractionProvider)
 
         isRunning = true
         append("Started \(deviceID) against \(url.absoluteString)")
 
-        let interval = intervalSeconds
+        let interval = settings.intervalSeconds
         runTask = Task { [weak self] in
             let budget = ResourceBudget(maxSteps: 1, maxWallClock: 60,
                                         minBatteryFraction: 0.2)

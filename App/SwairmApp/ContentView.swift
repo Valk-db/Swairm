@@ -223,26 +223,26 @@ struct ContentView: View {
     }
 
     private var anchorURLText: String {
-        get { useMLXTrainer ? mlxController.settings.anchorURLText : proxyController.anchorURLText }
+        get { useMLXTrainer ? mlxController.settings.anchorURLText : proxyController.settings.anchorURLText }
         set {
             if useMLXTrainer { mlxController.settings.anchorURLText = newValue }
-            else { proxyController.anchorURLText = newValue }
+            else { proxyController.settings.anchorURLText = newValue }
         }
     }
 
     private var deviceIndex: Int {
-        get { useMLXTrainer ? mlxController.settings.deviceIndex : proxyController.deviceIndex }
+        get { useMLXTrainer ? mlxController.settings.deviceIndex : proxyController.settings.deviceIndex }
         set {
             if useMLXTrainer { mlxController.settings.deviceIndex = newValue }
-            else { proxyController.deviceIndex = newValue }
+            else { proxyController.settings.deviceIndex = newValue }
         }
     }
 
     private var intervalSeconds: Double {
-        get { useMLXTrainer ? mlxController.settings.intervalSeconds : proxyController.intervalSeconds }
+        get { useMLXTrainer ? mlxController.settings.intervalSeconds : proxyController.settings.intervalSeconds }
         set {
             if useMLXTrainer { mlxController.settings.intervalSeconds = newValue }
-            else { proxyController.intervalSeconds = newValue }
+            else { proxyController.settings.intervalSeconds = newValue }
         }
     }
 
@@ -257,6 +257,17 @@ struct ContentView: View {
             bgScheduler.config.batchSize = mlxController.settings.batchSize
             bgScheduler.config.sequenceLength = mlxController.settings.sequenceLength
             bgScheduler.config.learningRate = mlxController.settings.learningRate
+            bgScheduler.config.weightDecay = mlxController.settings.weightDecay
+            bgScheduler.config.maxGradNorm = mlxController.settings.maxGradNorm
+            bgScheduler.config.warmupSteps = mlxController.settings.warmupSteps
+            bgScheduler.config.targetModules = mlxController.settings.targetModules
+            bgScheduler.config.loraRank = mlxController.settings.loraRank
+            bgScheduler.config.loraAlpha = mlxController.settings.loraAlpha
+            bgScheduler.config.seed = mlxController.settings.seed
+            bgScheduler.config.curriculumEpoch = mlxController.settings.curriculumEpoch
+        } else {
+            bgScheduler.config.anchorURL = anchorURLText
+            bgScheduler.config.intervalSeconds = intervalSeconds
         }
 
         if useMLXTrainer {
