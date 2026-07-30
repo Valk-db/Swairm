@@ -122,6 +122,14 @@ final class BackgroundTaskScheduler {
                 batchSize: config.batchSize,
                 sequenceLength: config.sequenceLength,
                 learningRate: config.learningRate,
+                weightDecay: config.weightDecay,
+                maxGradNorm: config.maxGradNorm,
+                warmupSteps: config.warmupSteps,
+                targetModules: config.targetModules,
+                loraRank: config.loraRank,
+                loraAlpha: config.loraAlpha,
+                seed: config.seed,
+                curriculumEpoch: config.curriculumEpoch,
                 minBatteryFraction: config.minBatteryFraction,
                 hmacSecret: config.hmacSecret
             )
