@@ -30,7 +30,7 @@ final class ProxySettings {
 @Observable
 final class DeviceLoopController {
     // ------------------------------------------------------------- config (persisted via ProxySettings)
-    let settings = ProxySettings()
+    var settings = ProxySettings()
 
     // ------------------------------------------------------------- state
     private(set) var isRunning = false

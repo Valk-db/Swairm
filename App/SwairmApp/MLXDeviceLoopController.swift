@@ -91,7 +91,7 @@
  @Observable
  final class MLXDeviceLoopController {
      // ------------------------------------------------------------ config (persisted via MLXSettings)
-     let settings = MLXSettings()
+     var settings = MLXSettings()
 
     // ------------------------------------------------------------ state
     private(set) var isRunning = false
@@ -149,8 +149,8 @@
             isRunning = true
             append("Started \(deviceID) (MLX) against \(url.absoluteString)")
 
-            let interval = intervalSeconds
-            let maxSteps = maxStepsPerRound
+            let interval = settings.intervalSeconds
+            let maxSteps = settings.maxStepsPerRound
             runTask = Task { [weak self] in
                 let budget = ResourceBudget(
                     maxSteps: maxSteps,
