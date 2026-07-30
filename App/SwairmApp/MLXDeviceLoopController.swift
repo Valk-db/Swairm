@@ -201,8 +201,8 @@ final class MLXDeviceLoopController {
                 let budget = ResourceBudget(
                     maxSteps: maxSteps,
                     maxWallClock: 300,
-                    minBatteryFraction: 0.2,
-                    stopOnSeriousThermalState: true
+                    stopOnSeriousThermalState: true,
+                    minBatteryFraction: 0.2
                 )
                 while !Task.isCancelled {
                     do {
