@@ -114,11 +114,11 @@ final class MLXSettings {
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraAlpha") }
     }
-    var seed: UInt64 {
+    var seed: UInt32 {
         get {
             let obj = UserDefaults.standard.object(forKey: "mlx.seed")
-            if let u = obj as? UInt64 { return u }
-            if let n = obj as? NSNumber { return n.uint64Value }
+            if let u = obj as? UInt32 { return u }
+            if let n = obj as? NSNumber { return n.uint32Value }
             return 42
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.seed") }
@@ -188,7 +188,7 @@ final class MLXDeviceLoopController {
                     batchSize: settings.batchSize,
                     sequenceLength: settings.sequenceLength,
                     curriculumDirectory: resolvedInDocuments(resolvedCurriculumDir),
-                    seed: settings.seed + UInt64(settings.deviceIndex)
+                    seed: UInt64(settings.seed) + UInt64(settings.deviceIndex)
                 )
             )
 

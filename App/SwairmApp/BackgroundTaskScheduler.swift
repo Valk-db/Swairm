@@ -53,7 +53,7 @@ struct BackgroundTrainingConfig: Codable, Sendable {
     var targetModules: String
     var loraRank: Int
     var loraAlpha: Float
-    var seed: UInt64
+    var seed: UInt32
     var curriculumEpoch: Int
     var minBatteryFraction: Float?
     var hmacSecret: Data?
@@ -410,7 +410,7 @@ final class BackgroundTaskScheduler {
                         batchSize: config.batchSize,
                         sequenceLength: config.sequenceLength,
                         curriculumDirectory: resolvedInDocuments("curriculum/epoch_\(config.curriculumEpoch)"),
-                        seed: config.seed + UInt64(config.deviceIndex)
+                        seed: UInt64(config.seed) + UInt64(config.deviceIndex)
                     )
                 )
 
