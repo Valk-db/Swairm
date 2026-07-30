@@ -1,39 +1,41 @@
 // Drives one MLXDeviceLoop against a LAN Anchor from the UI.
-// Mirrors DeviceLoopController API but uses real MLX DoRA training.
-//
-// Model & curriculum download: uses ModelDownloader to fetch shards and
-// adapter from the Anchor before starting training.
+ // Mirrors DeviceLoopController API but uses real MLX DoRA training.
+ //
+ // Model & curriculum download: uses ModelDownloader to fetch shards and
+ // adapter from the Anchor before starting training.
 
-import SwiftUI
-import UIKit
-import SwairmCore
+ import SwiftUI
+ import UIKit
+ import SwairmCore
 
-@MainActor
-@Observable
-final class MLXDeviceLoopController {
-    // ------------------------------------------------------------ config
-    var anchorURLText = "http://172.20.10.5:8000"
-    var deviceIndex = 0
-    /// Seconds to wait between rounds (mirrors the CLI --interval flag).
-    var intervalSeconds = 25.0
+ @MainActor
+ @Observable
+ final class MLXDeviceLoopController {
+     // ------------------------------------------------------------ config (persisted via @AppStorage)
+     @AppStorage("mlx.anchorURLText") var anchorURLText = "http://172.20.10.5:8000"
+     @AppStorage("mlx.deviceIndex") var deviceIndex = 0
+     @AppStorage("mlx.intervalSeconds") var intervalSeconds = 25.0
 
-    // MLX-specific config
-    // Matches CI's local_dir naming (mlx-e2e job) -- copy the same
-    // mlx-community/Qwen3-0.6B-bf16 files into Documents/mlx-model via
-    // Files app to reuse the exact model this default expects.
-    // DEFAULTS MATCH CI (mlx-e2e): batch=1, seq=64, steps=1 to fit iPhone 12 Pro Max 6GB RAM.
-    var modelPath = "mlx-model"
-    var curriculumDirectory = "curriculum"
-    var maxStepsPerRound = 1
-    var batchSize = 1
-    var sequenceLength = 64
-    var learningRate: Float = 1e-4
+     // MLX-specific config
+     @AppStorage("mlx.modelPath") var modelPath = "mlx-model"
+     @AppStorage("mlx.curriculumDirectory") var curriculumDirectory = "curriculum"
+     @AppStorage("mlx.maxStepsPerRound") var maxStepsPerRound = 1
+     @AppStorage("mlx.batchSize") var batchSize = 1
+     @AppStorage("mlx.sequenceLength") var sequenceLength = 64
+     @AppStorage("mlx.learningRate") var learningRate: Float = 1e-4
+     @AppStorage("mlx.weightDecay") var weightDecay: Float = 0.01
+     @AppStorage("mlx.maxGradNorm") var maxGradNorm: Float = 1.0
+     @AppStorage("mlx.warmupSteps") var warmupSteps = 10
+     @AppStorage("mlx.targetModules") var targetModules = "q_proj,v_proj,gate_proj,up_proj,down_proj"
+     @AppStorage("mlx.loraRank") var loraRank = 6
+     @AppStorage("mlx.loraAlpha") var loraAlpha: Float = 16.0
+     @AppStorage("mlx.seed") var seed: UInt64 = 42
 
-    // Base model to download from Anchor (e.g., "Qwen3-0.6B-8bit")
-    var baseModelName = "Qwen3-0.6B-8bit"
+     // Base model to download from Anchor (e.g., "Qwen3-0.6B-8bit")
+     @AppStorage("mlx.baseModelName") var baseModelName = "Qwen3-0.6B-8bit"
 
-    // Curriculum epoch to download
-    var curriculumEpoch = 0
+     // Curriculum epoch to download
+     @AppStorage("mlx.curriculumEpoch") var curriculumEpoch = 0
 
     // ------------------------------------------------------------ state
     private(set) var isRunning = false
@@ -73,18 +75,18 @@ final class MLXDeviceLoopController {
                 deviceIndex: deviceIndex,
                 config: MLXLoopConfig(
                     modelPath: resolvedInDocuments(modelPath),
-                    targetModules: ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-                    rankMap: ["": 6],           // uniform rank 6 for all target modules
-                    alphaMap: ["": 16.0],       // uniform alpha 16 -> scale = 16/6
+                    targetModules: targetModules.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) },
+                    rankMap: ["": loraRank],
+                    alphaMap: ["": loraAlpha],
                     learningRate: learningRate,
-                    weightDecay: 0.01,
-                    maxGradNorm: 1.0,
-                    warmupSteps: 10,
+                    weightDecay: weightDecay,
+                    maxGradNorm: maxGradNorm,
+                    warmupSteps: warmupSteps,
                     maxStepsPerRound: maxStepsPerRound,
                     batchSize: batchSize,
                     sequenceLength: sequenceLength,
                     curriculumDirectory: resolvedInDocuments(resolvedCurriculumDir),
-                    seed: 42 + UInt64(deviceIndex)
+                    seed: seed + UInt64(deviceIndex)
                 )
             )
 

@@ -11,11 +11,11 @@ import SwairmCore
 @MainActor
 @Observable
 final class DeviceLoopController {
-    // ------------------------------------------------------------- config
-    var anchorURLText = "http://172.20.10.5:8000"
-    var deviceIndex = 0
+    // ------------------------------------------------------------- config (persisted via @AppStorage)
+    @AppStorage("proxy.anchorURLText") var anchorURLText = "http://172.20.10.5:8000"
+    @AppStorage("proxy.deviceIndex") var deviceIndex = 0
     /// Seconds to wait between rounds (mirrors the CLI --interval flag).
-    var intervalSeconds = 25.0
+    @AppStorage("proxy.intervalSeconds") var intervalSeconds = 25.0
 
     // ------------------------------------------------------------- state
     private(set) var isRunning = false

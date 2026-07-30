@@ -7,11 +7,6 @@ struct ContentView: View {
     @State private var mlxController = MLXDeviceLoopController()
     @State private var bgScheduler = BackgroundTaskScheduler.shared
 
-    // Shared state properties that both controllers expose
-    @State private var anchorURLText = "http://172.20.10.5:8000"
-    @State private var deviceIndex = 0
-    @State private var intervalSeconds = 25.0
-
     var isRunning: Bool {
         useMLXTrainer ? mlxController.isRunning : proxyController.isRunning
     }
@@ -38,7 +33,6 @@ struct ContentView: View {
                 Section("Mode") {
                     Toggle("Use MLX Trainer (Real DoRA)", isOn: $useMLXTrainer)
                         .onChange(of: useMLXTrainer) { _, _ in
-                            // Stop any running loop when switching modes
                             if isRunning { stop() }
                         }
                 }
@@ -65,13 +59,41 @@ struct ContentView: View {
                         TextField("Curriculum dir", text: $mlxController.curriculumDirectory)
                             .disabled(isRunning)
                         Stepper("Steps/round: \(mlxController.maxStepsPerRound)",
-                                value: $mlxController.maxStepsPerRound, in: 10...500, step: 10)
+                                value: $mlxController.maxStepsPerRound, in: 1...500, step: 1)
                             .disabled(isRunning)
                         Stepper("Batch size: \(mlxController.batchSize)",
                                 value: $mlxController.batchSize, in: 1...8)
                             .disabled(isRunning)
                         Stepper("Seq length: \(mlxController.sequenceLength)",
-                                value: $mlxController.sequenceLength, in: 64...512, step: 32)
+                                value: $mlxController.sequenceLength, in: 32...512, step: 32)
+                            .disabled(isRunning)
+                        Stepper("Learning rate: \(String(format: "%.0e", mlxController.learningRate))",
+                                value: $mlxController.learningRate, in: 1e-5...1e-3, step: 1e-5)
+                            .disabled(isRunning)
+                        Stepper("Weight decay: \(String(format: "%.4f", mlxController.weightDecay))",
+                                value: $mlxController.weightDecay, in: 0...0.1, step: 0.01)
+                            .disabled(isRunning)
+                        Stepper("Max grad norm: \(String(format: "%.2f", mlxController.maxGradNorm))",
+                                value: $mlxController.maxGradNorm, in: 0.1...5.0, step: 0.1)
+                            .disabled(isRunning)
+                        Stepper("Warmup steps: \(mlxController.warmupSteps)",
+                                value: $mlxController.warmupSteps, in: 0...100, step: 1)
+                            .disabled(isRunning)
+                    }
+
+                    Section("MLX Advanced") {
+                        TextField("Target modules (comma-separated)", text: $mlxController.targetModules)
+                            .disabled(isRunning)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Stepper("LoRA rank: \(mlxController.loraRank)",
+                                value: $mlxController.loraRank, in: 1...16, step: 1)
+                            .disabled(isRunning)
+                        Stepper("LoRA alpha: \(String(format: "%.1f", mlxController.loraAlpha))",
+                                value: $mlxController.loraAlpha, in: 1...64, step: 1)
+                            .disabled(isRunning)
+                        Stepper("Seed: \(mlxController.seed)",
+                                value: $mlxController.seed, in: 0...UInt64.max, step: 1)
                             .disabled(isRunning)
                     }
 
@@ -200,8 +222,31 @@ struct ContentView: View {
         }
     }
 
+    private var anchorURLText: String {
+        get { useMLXTrainer ? mlxController.anchorURLText : proxyController.anchorURLText }
+        set {
+            if useMLXTrainer { mlxController.anchorURLText = newValue }
+            else { proxyController.anchorURLText = newValue }
+        }
+    }
+
+    private var deviceIndex: Int {
+        get { useMLXTrainer ? mlxController.deviceIndex : proxyController.deviceIndex }
+        set {
+            if useMLXTrainer { mlxController.deviceIndex = newValue }
+            else { proxyController.deviceIndex = newValue }
+        }
+    }
+
+    private var intervalSeconds: Double {
+        get { useMLXTrainer ? mlxController.intervalSeconds : proxyController.intervalSeconds }
+        set {
+            if useMLXTrainer { mlxController.intervalSeconds = newValue }
+            else { proxyController.intervalSeconds = newValue }
+        }
+    }
+
     private func start() {
-        // Sync URL to background scheduler
         bgScheduler.anchorURLText = anchorURLText
         bgScheduler.config.deviceIndex = deviceIndex
         bgScheduler.config.useMLXTrainer = useMLXTrainer
