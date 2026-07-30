@@ -108,7 +108,7 @@ struct ContentView: View {
                                 value: $mlxController.settings.loraAlpha, in: 1...64, step: 1)
                             .disabled(isRunning)
                         Stepper("Seed: \(mlxController.settings.seed)",
-                                value: $mlxController.settings.seed, in: 0...UInt64.max, step: 1)
+                                value: $mlxController.settings.seed, in: 0...UInt32.max, step: 1)
                             .disabled(isRunning)
                     }
 

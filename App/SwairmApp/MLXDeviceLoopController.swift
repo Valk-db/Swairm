@@ -8,6 +8,13 @@ import SwiftUI
 import UIKit
 import SwairmCore
 
+// Clamping helper for numeric bounds
+extension Comparable {
+    func clamped(to limits: ClosedRange<Self>) -> Self {
+        min(max(self, limits.lowerBound), limits.upperBound)
+    }
+}
+
 // Settings persisted via UserDefaults — plain class with computed properties.
 // NOT @Observable because the Observation macro requires stored properties.
 // MLXDeviceLoopController is @Observable and owns an MLXSettings instance;
@@ -19,11 +26,17 @@ final class MLXSettings {
         set { UserDefaults.standard.set(newValue, forKey: "mlx.anchorURLText") }
     }
     var deviceIndex: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.deviceIndex") }
+        get {
+            let v = UserDefaults.standard.integer(forKey: "mlx.deviceIndex")
+            return max(0, min(v, 63))
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.deviceIndex") }
     }
     var intervalSeconds: Double {
-        get { UserDefaults.standard.double(forKey: "mlx.intervalSeconds") == 0 ? 25.0 : UserDefaults.standard.double(forKey: "mlx.intervalSeconds") }
+        get {
+            let v = UserDefaults.standard.double(forKey: "mlx.intervalSeconds")
+            return (v == 0 ? 25.0 : v).clamped(to: 5...300)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.intervalSeconds") }
     }
     var modelPath: String {
@@ -35,31 +48,52 @@ final class MLXSettings {
         set { UserDefaults.standard.set(newValue, forKey: "mlx.curriculumDirectory") }
     }
     var maxStepsPerRound: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.maxStepsPerRound") == 0 ? 1 : UserDefaults.standard.integer(forKey: "mlx.maxStepsPerRound") }
+        get {
+            let v = UserDefaults.standard.integer(forKey: "mlx.maxStepsPerRound")
+            return (v == 0 ? 1 : v).clamped(to: 1...500)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.maxStepsPerRound") }
     }
     var batchSize: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.batchSize") == 0 ? 1 : UserDefaults.standard.integer(forKey: "mlx.batchSize") }
+        get {
+            let v = UserDefaults.standard.integer(forKey: "mlx.batchSize")
+            return (v == 0 ? 1 : v).clamped(to: 1...8)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.batchSize") }
     }
     var sequenceLength: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.sequenceLength") == 0 ? 64 : UserDefaults.standard.integer(forKey: "mlx.sequenceLength") }
+        get {
+            let v = UserDefaults.standard.integer(forKey: "mlx.sequenceLength")
+            return (v == 0 ? 64 : v).clamped(to: 32...512)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.sequenceLength") }
     }
     var learningRate: Float {
-        get { UserDefaults.standard.float(forKey: "mlx.learningRate") == 0 ? 1e-4 : UserDefaults.standard.float(forKey: "mlx.learningRate") }
+        get {
+            let v = UserDefaults.standard.float(forKey: "mlx.learningRate")
+            return (v == 0 ? 1e-4 : v).clamped(to: 1e-5...1e-3)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.learningRate") }
     }
     var weightDecay: Float {
-        get { UserDefaults.standard.float(forKey: "mlx.weightDecay") == 0 ? 0.01 : UserDefaults.standard.float(forKey: "mlx.weightDecay") }
+        get {
+            let v = UserDefaults.standard.float(forKey: "mlx.weightDecay")
+            return (v == 0 ? 0.01 : v).clamped(to: 0...0.1)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.weightDecay") }
     }
     var maxGradNorm: Float {
-        get { UserDefaults.standard.float(forKey: "mlx.maxGradNorm") == 0 ? 1.0 : UserDefaults.standard.float(forKey: "mlx.maxGradNorm") }
+        get {
+            let v = UserDefaults.standard.float(forKey: "mlx.maxGradNorm")
+            return (v == 0 ? 1.0 : v).clamped(to: 0.1...5.0)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.maxGradNorm") }
     }
     var warmupSteps: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.warmupSteps") == 0 ? 10 : UserDefaults.standard.integer(forKey: "mlx.warmupSteps") }
+        get {
+            let v = UserDefaults.standard.integer(forKey: "mlx.warmupSteps")
+            return (v == 0 ? 10 : v).clamped(to: 0...100)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.warmupSteps") }
     }
     var targetModules: String {
@@ -67,11 +101,17 @@ final class MLXSettings {
         set { UserDefaults.standard.set(newValue, forKey: "mlx.targetModules") }
     }
     var loraRank: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.loraRank") == 0 ? 6 : UserDefaults.standard.integer(forKey: "mlx.loraRank") }
+        get {
+            let v = UserDefaults.standard.integer(forKey: "mlx.loraRank")
+            return (v == 0 ? 6 : v).clamped(to: 1...16)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraRank") }
     }
     var loraAlpha: Float {
-        get { UserDefaults.standard.float(forKey: "mlx.loraAlpha") == 0 ? 16.0 : UserDefaults.standard.float(forKey: "mlx.loraAlpha") }
+        get {
+            let v = UserDefaults.standard.float(forKey: "mlx.loraAlpha")
+            return (v == 0 ? 16.0 : v).clamped(to: 1...64)
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraAlpha") }
     }
     var seed: UInt64 {
@@ -88,7 +128,7 @@ final class MLXSettings {
         set { UserDefaults.standard.set(newValue, forKey: "mlx.baseModelName") }
     }
     var curriculumEpoch: Int {
-        get { UserDefaults.standard.integer(forKey: "mlx.curriculumEpoch") }
+        get { UserDefaults.standard.integer(forKey: "mlx.curriculumEpoch").clamped(to: 0...999) }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.curriculumEpoch") }
     }
 }
