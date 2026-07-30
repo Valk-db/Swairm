@@ -8,34 +8,90 @@
  import UIKit
  import SwairmCore
 
+ // Settings persisted via @AppStorage — kept separate from @Observable
+ // because the Observation macro doesn't support property wrappers on iOS targets.
+ @MainActor
+ @Observable
+ final class MLXSettings {
+     var anchorURLText: String {
+         get { UserDefaults.standard.string(forKey: "mlx.anchorURLText") ?? "http://172.20.10.5:8000" }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.anchorURLText") }
+     }
+     var deviceIndex: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.deviceIndex") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.deviceIndex") }
+     }
+     var intervalSeconds: Double {
+         get { UserDefaults.standard.double(forKey: "mlx.intervalSeconds") == 0 ? 25.0 : UserDefaults.standard.double(forKey: "mlx.intervalSeconds") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.intervalSeconds") }
+     }
+     var modelPath: String {
+         get { UserDefaults.standard.string(forKey: "mlx.modelPath") ?? "mlx-model" }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.modelPath") }
+     }
+     var curriculumDirectory: String {
+         get { UserDefaults.standard.string(forKey: "mlx.curriculumDirectory") ?? "curriculum" }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.curriculumDirectory") }
+     }
+     var maxStepsPerRound: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.maxStepsPerRound") == 0 ? 1 : UserDefaults.standard.integer(forKey: "mlx.maxStepsPerRound") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.maxStepsPerRound") }
+     }
+     var batchSize: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.batchSize") == 0 ? 1 : UserDefaults.standard.integer(forKey: "mlx.batchSize") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.batchSize") }
+     }
+     var sequenceLength: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.sequenceLength") == 0 ? 64 : UserDefaults.standard.integer(forKey: "mlx.sequenceLength") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.sequenceLength") }
+     }
+     var learningRate: Float {
+         get { UserDefaults.standard.float(forKey: "mlx.learningRate") == 0 ? 1e-4 : UserDefaults.standard.float(forKey: "mlx.learningRate") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.learningRate") }
+     }
+     var weightDecay: Float {
+         get { UserDefaults.standard.float(forKey: "mlx.weightDecay") == 0 ? 0.01 : UserDefaults.standard.float(forKey: "mlx.weightDecay") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.weightDecay") }
+     }
+     var maxGradNorm: Float {
+         get { UserDefaults.standard.float(forKey: "mlx.maxGradNorm") == 0 ? 1.0 : UserDefaults.standard.float(forKey: "mlx.maxGradNorm") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.maxGradNorm") }
+     }
+     var warmupSteps: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.warmupSteps") == 0 ? 10 : UserDefaults.standard.integer(forKey: "mlx.warmupSteps") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.warmupSteps") }
+     }
+     var targetModules: String {
+         get { UserDefaults.standard.string(forKey: "mlx.targetModules") ?? "q_proj,v_proj,gate_proj,up_proj,down_proj" }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.targetModules") }
+     }
+     var loraRank: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.loraRank") == 0 ? 6 : UserDefaults.standard.integer(forKey: "mlx.loraRank") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraRank") }
+     }
+     var loraAlpha: Float {
+         get { UserDefaults.standard.float(forKey: "mlx.loraAlpha") == 0 ? 16.0 : UserDefaults.standard.float(forKey: "mlx.loraAlpha") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraAlpha") }
+     }
+     var seed: UInt64 {
+         get { UserDefaults.standard.object(forKey: "mlx.seed") as? UInt64 ?? 42 }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.seed") }
+     }
+     var baseModelName: String {
+         get { UserDefaults.standard.string(forKey: "mlx.baseModelName") ?? "Qwen3-0.6B-8bit" }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.baseModelName") }
+     }
+     var curriculumEpoch: Int {
+         get { UserDefaults.standard.integer(forKey: "mlx.curriculumEpoch") }
+         set { UserDefaults.standard.set(newValue, forKey: "mlx.curriculumEpoch") }
+     }
+ }
+
  @MainActor
  @Observable
  final class MLXDeviceLoopController {
-     // ------------------------------------------------------------ config (persisted via @AppStorage)
-     @AppStorage("mlx.anchorURLText") var anchorURLText = "http://172.20.10.5:8000"
-     @AppStorage("mlx.deviceIndex") var deviceIndex = 0
-     @AppStorage("mlx.intervalSeconds") var intervalSeconds = 25.0
-
-     // MLX-specific config
-     @AppStorage("mlx.modelPath") var modelPath = "mlx-model"
-     @AppStorage("mlx.curriculumDirectory") var curriculumDirectory = "curriculum"
-     @AppStorage("mlx.maxStepsPerRound") var maxStepsPerRound = 1
-     @AppStorage("mlx.batchSize") var batchSize = 1
-     @AppStorage("mlx.sequenceLength") var sequenceLength = 64
-     @AppStorage("mlx.learningRate") var learningRate: Float = 1e-4
-     @AppStorage("mlx.weightDecay") var weightDecay: Float = 0.01
-     @AppStorage("mlx.maxGradNorm") var maxGradNorm: Float = 1.0
-     @AppStorage("mlx.warmupSteps") var warmupSteps = 10
-     @AppStorage("mlx.targetModules") var targetModules = "q_proj,v_proj,gate_proj,up_proj,down_proj"
-     @AppStorage("mlx.loraRank") var loraRank = 6
-     @AppStorage("mlx.loraAlpha") var loraAlpha: Float = 16.0
-     @AppStorage("mlx.seed") var seed: UInt64 = 42
-
-     // Base model to download from Anchor (e.g., "Qwen3-0.6B-8bit")
-     @AppStorage("mlx.baseModelName") var baseModelName = "Qwen3-0.6B-8bit"
-
-     // Curriculum epoch to download
-     @AppStorage("mlx.curriculumEpoch") var curriculumEpoch = 0
+     // ------------------------------------------------------------ config (persisted via MLXSettings)
+     let settings = MLXSettings()
 
     // ------------------------------------------------------------ state
     private(set) var isRunning = false
@@ -49,7 +105,7 @@
 
     typealias LogEntry = DeviceLoopController.LogEntry
 
-    var deviceID: String { "phone\(deviceIndex)" }
+    var deviceID: String { "phone\(settings.deviceIndex)" }
 
     // Model downloader for fetching curriculum and adapters
     private let modelDownloader = ModelDownloader()
@@ -57,8 +113,8 @@
     // ------------------------------------------------------------ control
     func start() {
         guard !isRunning else { return }
-        guard let url = URL(string: anchorURLText), url.scheme != nil else {
-            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+        guard let url = URL(string: settings.anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(settings.anchorURLText)", isError: true)
             return
         }
 
@@ -66,27 +122,27 @@
         let anchor = AnchorClient(base: url)
 
         // Resolve curriculum directory to the epoch-specific path that downloadCurriculum() writes to
-        let resolvedCurriculumDir = "curriculum/epoch_\(curriculumEpoch)"
+        let resolvedCurriculumDir = "curriculum/epoch_\(settings.curriculumEpoch)"
 
         do {
             let loop = try MLXDeviceLoop(
                 anchor: anchor,
                 deviceID: deviceID,
-                deviceIndex: deviceIndex,
+                deviceIndex: settings.deviceIndex,
                 config: MLXLoopConfig(
-                    modelPath: resolvedInDocuments(modelPath),
-                    targetModules: targetModules.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) },
-                    rankMap: ["": loraRank],
-                    alphaMap: ["": loraAlpha],
-                    learningRate: learningRate,
-                    weightDecay: weightDecay,
-                    maxGradNorm: maxGradNorm,
-                    warmupSteps: warmupSteps,
-                    maxStepsPerRound: maxStepsPerRound,
-                    batchSize: batchSize,
-                    sequenceLength: sequenceLength,
+                    modelPath: resolvedInDocuments(settings.modelPath),
+                    targetModules: settings.targetModules.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) },
+                    rankMap: ["": settings.loraRank],
+                    alphaMap: ["": settings.loraAlpha],
+                    learningRate: settings.learningRate,
+                    weightDecay: settings.weightDecay,
+                    maxGradNorm: settings.maxGradNorm,
+                    warmupSteps: settings.warmupSteps,
+                    maxStepsPerRound: settings.maxStepsPerRound,
+                    batchSize: settings.batchSize,
+                    sequenceLength: settings.sequenceLength,
                     curriculumDirectory: resolvedInDocuments(resolvedCurriculumDir),
-                    seed: seed + UInt64(deviceIndex)
+                    seed: settings.seed + UInt64(settings.deviceIndex)
                 )
             )
 
@@ -128,13 +184,13 @@
     /// Download curriculum shards for the configured epoch.
     func downloadCurriculum() {
         guard !isDownloading else { return }
-        guard let url = URL(string: anchorURLText), url.scheme != nil else {
-            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+        guard let url = URL(string: settings.anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(settings.anchorURLText)", isError: true)
             return
         }
 
         let anchor = AnchorClient(base: url)
-        let epoch = curriculumEpoch
+        let epoch = settings.curriculumEpoch
 
         isDownloading = true
         append("Downloading curriculum epoch \(epoch)...")
@@ -154,7 +210,7 @@
                 await MainActor.run {
                     if let dir = epochDir {
                         self?.append("Curriculum epoch \(epoch) ready at \(dir.lastPathComponent)")
-                        self?.curriculumDirectory = "curriculum/epoch_\(epoch)"
+                        self?.settings.curriculumDirectory = "curriculum/epoch_\(epoch)"
                     }
                 }
             } catch {
@@ -168,8 +224,8 @@
     /// Download the latest model adapter from the Anchor.
     func downloadModel() {
         guard !isDownloading else { return }
-        guard let url = URL(string: anchorURLText), url.scheme != nil else {
-            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+        guard let url = URL(string: settings.anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(settings.anchorURLText)", isError: true)
             return
         }
 
@@ -211,13 +267,13 @@
     /// Download a base MLX model from the Anchor.
     func downloadBaseModel() {
         guard !isDownloading else { return }
-        guard let url = URL(string: anchorURLText), url.scheme != nil else {
-            append("Invalid Anchor URL: \(anchorURLText)", isError: true)
+        guard let url = URL(string: settings.anchorURLText), url.scheme != nil else {
+            append("Invalid Anchor URL: \(settings.anchorURLText)", isError: true)
             return
         }
 
         let anchor = AnchorClient(base: url)
-        let modelName = baseModelName
+        let modelName = settings.baseModelName
 
         isDownloading = true
         append("Downloading base model \(modelName)...")

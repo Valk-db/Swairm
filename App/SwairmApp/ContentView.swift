@@ -54,51 +54,51 @@ struct ContentView: View {
 
                 if useMLXTrainer {
                     Section("MLX Model") {
-                        TextField("Model path", text: $mlxController.modelPath)
+                        TextField("Model path", text: $mlxController.settings.modelPath)
                             .disabled(isRunning)
-                        TextField("Curriculum dir", text: $mlxController.curriculumDirectory)
+                        TextField("Curriculum dir", text: $mlxController.settings.curriculumDirectory)
                             .disabled(isRunning)
-                        Stepper("Steps/round: \(mlxController.maxStepsPerRound)",
-                                value: $mlxController.maxStepsPerRound, in: 1...500, step: 1)
+                        Stepper("Steps/round: \(mlxController.settings.maxStepsPerRound)",
+                                value: $mlxController.settings.maxStepsPerRound, in: 1...500, step: 1)
                             .disabled(isRunning)
-                        Stepper("Batch size: \(mlxController.batchSize)",
-                                value: $mlxController.batchSize, in: 1...8)
+                        Stepper("Batch size: \(mlxController.settings.batchSize)",
+                                value: $mlxController.settings.batchSize, in: 1...8)
                             .disabled(isRunning)
-                        Stepper("Seq length: \(mlxController.sequenceLength)",
-                                value: $mlxController.sequenceLength, in: 32...512, step: 32)
+                        Stepper("Seq length: \(mlxController.settings.sequenceLength)",
+                                value: $mlxController.settings.sequenceLength, in: 32...512, step: 32)
                             .disabled(isRunning)
-                        Stepper("Learning rate: \(String(format: "%.0e", mlxController.learningRate))",
-                                value: $mlxController.learningRate, in: 1e-5...1e-3, step: 1e-5)
+                        Stepper("Learning rate: \(String(format: "%.0e", mlxController.settings.learningRate))",
+                                value: $mlxController.settings.learningRate, in: 1e-5...1e-3, step: 1e-5)
                             .disabled(isRunning)
-                        Stepper("Weight decay: \(String(format: "%.4f", mlxController.weightDecay))",
-                                value: $mlxController.weightDecay, in: 0...0.1, step: 0.01)
+                        Stepper("Weight decay: \(String(format: "%.4f", mlxController.settings.weightDecay))",
+                                value: $mlxController.settings.weightDecay, in: 0...0.1, step: 0.01)
                             .disabled(isRunning)
-                        Stepper("Max grad norm: \(String(format: "%.2f", mlxController.maxGradNorm))",
-                                value: $mlxController.maxGradNorm, in: 0.1...5.0, step: 0.1)
+                        Stepper("Max grad norm: \(String(format: "%.2f", mlxController.settings.maxGradNorm))",
+                                value: $mlxController.settings.maxGradNorm, in: 0.1...5.0, step: 0.1)
                             .disabled(isRunning)
-                        Stepper("Warmup steps: \(mlxController.warmupSteps)",
-                                value: $mlxController.warmupSteps, in: 0...100, step: 1)
+                        Stepper("Warmup steps: \(mlxController.settings.warmupSteps)",
+                                value: $mlxController.settings.warmupSteps, in: 0...100, step: 1)
                             .disabled(isRunning)
                     }
 
                     Section("MLX Advanced") {
-                        TextField("Target modules (comma-separated)", text: $mlxController.targetModules)
+                        TextField("Target modules (comma-separated)", text: $mlxController.settings.targetModules)
                             .disabled(isRunning)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        Stepper("LoRA rank: \(mlxController.loraRank)",
-                                value: $mlxController.loraRank, in: 1...16, step: 1)
+                        Stepper("LoRA rank: \(mlxController.settings.loraRank)",
+                                value: $mlxController.settings.loraRank, in: 1...16, step: 1)
                             .disabled(isRunning)
-                        Stepper("LoRA alpha: \(String(format: "%.1f", mlxController.loraAlpha))",
-                                value: $mlxController.loraAlpha, in: 1...64, step: 1)
+                        Stepper("LoRA alpha: \(String(format: "%.1f", mlxController.settings.loraAlpha))",
+                                value: $mlxController.settings.loraAlpha, in: 1...64, step: 1)
                             .disabled(isRunning)
-                        Stepper("Seed: \(mlxController.seed)",
-                                value: $mlxController.seed, in: 0...UInt64.max, step: 1)
+                        Stepper("Seed: \(mlxController.settings.seed)",
+                                value: $mlxController.settings.seed, in: 0...UInt64.max, step: 1)
                             .disabled(isRunning)
                     }
 
                     Section("Base Model") {
-                        TextField("Base model name", text: $mlxController.baseModelName)
+                        TextField("Base model name", text: $mlxController.settings.baseModelName)
                             .disabled(isRunning || mlxController.isDownloading)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -111,8 +111,8 @@ struct ContentView: View {
                     }
 
                     Section("Downloads") {
-                        Stepper("Curriculum epoch: \(mlxController.curriculumEpoch)",
-                                value: $mlxController.curriculumEpoch, in: 0...999)
+                        Stepper("Curriculum epoch: \(mlxController.settings.curriculumEpoch)",
+                                value: $mlxController.settings.curriculumEpoch, in: 0...999)
                             .disabled(isRunning || mlxController.isDownloading)
 
                         Button("Download Curriculum") {
@@ -223,25 +223,25 @@ struct ContentView: View {
     }
 
     private var anchorURLText: String {
-        get { useMLXTrainer ? mlxController.anchorURLText : proxyController.anchorURLText }
+        get { useMLXTrainer ? mlxController.settings.anchorURLText : proxyController.anchorURLText }
         set {
-            if useMLXTrainer { mlxController.anchorURLText = newValue }
+            if useMLXTrainer { mlxController.settings.anchorURLText = newValue }
             else { proxyController.anchorURLText = newValue }
         }
     }
 
     private var deviceIndex: Int {
-        get { useMLXTrainer ? mlxController.deviceIndex : proxyController.deviceIndex }
+        get { useMLXTrainer ? mlxController.settings.deviceIndex : proxyController.deviceIndex }
         set {
-            if useMLXTrainer { mlxController.deviceIndex = newValue }
+            if useMLXTrainer { mlxController.settings.deviceIndex = newValue }
             else { proxyController.deviceIndex = newValue }
         }
     }
 
     private var intervalSeconds: Double {
-        get { useMLXTrainer ? mlxController.intervalSeconds : proxyController.intervalSeconds }
+        get { useMLXTrainer ? mlxController.settings.intervalSeconds : proxyController.intervalSeconds }
         set {
-            if useMLXTrainer { mlxController.intervalSeconds = newValue }
+            if useMLXTrainer { mlxController.settings.intervalSeconds = newValue }
             else { proxyController.intervalSeconds = newValue }
         }
     }
@@ -251,12 +251,12 @@ struct ContentView: View {
         bgScheduler.config.deviceIndex = deviceIndex
         bgScheduler.config.useMLXTrainer = useMLXTrainer
         if useMLXTrainer {
-            bgScheduler.config.modelPath = mlxController.modelPath
-            bgScheduler.config.curriculumDirectory = mlxController.curriculumDirectory
-            bgScheduler.config.maxStepsPerRound = mlxController.maxStepsPerRound
-            bgScheduler.config.batchSize = mlxController.batchSize
-            bgScheduler.config.sequenceLength = mlxController.sequenceLength
-            bgScheduler.config.learningRate = mlxController.learningRate
+            bgScheduler.config.modelPath = mlxController.settings.modelPath
+            bgScheduler.config.curriculumDirectory = mlxController.settings.curriculumDirectory
+            bgScheduler.config.maxStepsPerRound = mlxController.settings.maxStepsPerRound
+            bgScheduler.config.batchSize = mlxController.settings.batchSize
+            bgScheduler.config.sequenceLength = mlxController.settings.sequenceLength
+            bgScheduler.config.learningRate = mlxController.settings.learningRate
         }
 
         if useMLXTrainer {
