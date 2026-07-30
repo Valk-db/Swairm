@@ -38,18 +38,33 @@ struct ContentView: View {
                 }
 
                 Section("Anchor") {
-                    TextField("http://host:8000", text: $anchorURLText)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .disabled(isRunning)
-                    Stepper("Device index: \(deviceIndex)",
-                            value: $deviceIndex, in: 0...63)
-                        .disabled(isRunning)
-                    Stepper("Interval: \(Int(intervalSeconds))s",
-                            value: $intervalSeconds,
-                            in: 5...300, step: 5)
-                        .disabled(isRunning)
+                    if useMLXTrainer {
+                        TextField("http://host:8000", text: $mlxController.settings.anchorURLText)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(isRunning)
+                        Stepper("Device index: \(mlxController.settings.deviceIndex)",
+                                value: $mlxController.settings.deviceIndex, in: 0...63)
+                            .disabled(isRunning)
+                        Stepper("Interval: \(Int(mlxController.settings.intervalSeconds))s",
+                                value: $mlxController.settings.intervalSeconds,
+                                in: 5...300, step: 5)
+                            .disabled(isRunning)
+                    } else {
+                        TextField("http://host:8000", text: $proxyController.settings.anchorURLText)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(isRunning)
+                        Stepper("Device index: \(proxyController.settings.deviceIndex)",
+                                value: $proxyController.settings.deviceIndex, in: 0...63)
+                            .disabled(isRunning)
+                        Stepper("Interval: \(Int(proxyController.settings.intervalSeconds))s",
+                                value: $proxyController.settings.intervalSeconds,
+                                in: 5...300, step: 5)
+                            .disabled(isRunning)
+                    }
                 }
 
                 if useMLXTrainer {
@@ -222,35 +237,11 @@ struct ContentView: View {
         }
     }
 
-    private var anchorURLText: String {
-        get { useMLXTrainer ? mlxController.settings.anchorURLText : proxyController.settings.anchorURLText }
-        set {
-            if useMLXTrainer { mlxController.settings.anchorURLText = newValue }
-            else { proxyController.settings.anchorURLText = newValue }
-        }
-    }
-
-    private var deviceIndex: Int {
-        get { useMLXTrainer ? mlxController.settings.deviceIndex : proxyController.settings.deviceIndex }
-        set {
-            if useMLXTrainer { mlxController.settings.deviceIndex = newValue }
-            else { proxyController.settings.deviceIndex = newValue }
-        }
-    }
-
-    private var intervalSeconds: Double {
-        get { useMLXTrainer ? mlxController.settings.intervalSeconds : proxyController.settings.intervalSeconds }
-        set {
-            if useMLXTrainer { mlxController.settings.intervalSeconds = newValue }
-            else { proxyController.settings.intervalSeconds = newValue }
-        }
-    }
-
     private func start() {
-        bgScheduler.anchorURLText = anchorURLText
-        bgScheduler.config.deviceIndex = deviceIndex
-        bgScheduler.config.useMLXTrainer = useMLXTrainer
         if useMLXTrainer {
+            bgScheduler.anchorURLText = mlxController.settings.anchorURLText
+            bgScheduler.config.deviceIndex = mlxController.settings.deviceIndex
+            bgScheduler.config.useMLXTrainer = true
             bgScheduler.config.modelPath = mlxController.settings.modelPath
             bgScheduler.config.curriculumDirectory = mlxController.settings.curriculumDirectory
             bgScheduler.config.maxStepsPerRound = mlxController.settings.maxStepsPerRound
@@ -266,8 +257,11 @@ struct ContentView: View {
             bgScheduler.config.seed = mlxController.settings.seed
             bgScheduler.config.curriculumEpoch = mlxController.settings.curriculumEpoch
         } else {
-            bgScheduler.config.anchorURL = anchorURLText
-            bgScheduler.config.intervalSeconds = intervalSeconds
+            bgScheduler.anchorURLText = proxyController.settings.anchorURLText
+            bgScheduler.config.deviceIndex = proxyController.settings.deviceIndex
+            bgScheduler.config.useMLXTrainer = false
+            bgScheduler.config.anchorURL = proxyController.settings.anchorURLText
+            bgScheduler.config.intervalSeconds = proxyController.settings.intervalSeconds
         }
 
         if useMLXTrainer {
