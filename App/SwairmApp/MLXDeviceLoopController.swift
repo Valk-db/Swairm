@@ -75,7 +75,12 @@ final class MLXSettings {
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraAlpha") }
     }
     var seed: UInt64 {
-        get { UserDefaults.standard.object(forKey: "mlx.seed") as? UInt64 ?? 42 }
+        get {
+            let obj = UserDefaults.standard.object(forKey: "mlx.seed")
+            if let u = obj as? UInt64 { return u }
+            if let n = obj as? NSNumber { return n.uint64Value }
+            return 42
+        }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.seed") }
     }
     var baseModelName: String {
