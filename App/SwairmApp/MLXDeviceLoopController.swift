@@ -57,14 +57,14 @@ final class MLXSettings {
     var batchSize: Int {
         get {
             let v = UserDefaults.standard.integer(forKey: "mlx.batchSize")
-            return (v == 0 ? 1 : v).clamped(to: 1...8)
+            return (v == 0 ? 1 : v).clamped(to: 1...4)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.batchSize") }
     }
     var sequenceLength: Int {
         get {
             let v = UserDefaults.standard.integer(forKey: "mlx.sequenceLength")
-            return (v == 0 ? 64 : v).clamped(to: 32...512)
+            return (v == 0 ? 64 : v).clamped(to: 32...256)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.sequenceLength") }
     }
@@ -92,7 +92,7 @@ final class MLXSettings {
     var warmupSteps: Int {
         get {
             let v = UserDefaults.standard.integer(forKey: "mlx.warmupSteps")
-            return (v == 0 ? 10 : v).clamped(to: 0...100)
+            return (v == 0 ? 0 : v).clamped(to: 0...50)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.warmupSteps") }
     }
@@ -103,14 +103,14 @@ final class MLXSettings {
     var loraRank: Int {
         get {
             let v = UserDefaults.standard.integer(forKey: "mlx.loraRank")
-            return (v == 0 ? 6 : v).clamped(to: 1...16)
+            return (v == 0 ? 4 : v).clamped(to: 1...8)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraRank") }
     }
     var loraAlpha: Float {
         get {
             let v = UserDefaults.standard.float(forKey: "mlx.loraAlpha")
-            return (v == 0 ? 16.0 : v).clamped(to: 1...64)
+            return (v == 0 ? 16.0 : v).clamped(to: 1...32)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraAlpha") }
     }
@@ -201,7 +201,8 @@ final class MLXDeviceLoopController {
                 let budget = ResourceBudget(
                     maxSteps: maxSteps,
                     maxWallClock: 300,
-                    minBatteryFraction: 0.2
+                    minBatteryFraction: 0.2,
+                    stopOnSeriousThermalState: true
                 )
                 while !Task.isCancelled {
                     do {

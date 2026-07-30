@@ -6,6 +6,15 @@ import MLXLinalg
 @preconcurrency import MLXLMCommon
 import MLXLLM
 import Tokenizers
+import os.log
+
+// MLXTrainer logger
+private let trainerLog = OSLog(subsystem: "com.swairm.app", category: "MLXTrainer")
+
+private func logTrainer(_ message: String, level: OSLogType = .default) {
+    os_log("%{public}@", log: trainerLog, type: level, message)
+    print("[MLXTrainer] \(message)")
+}
 
 // MARK: - Local Tokenizer Loader
 
@@ -107,12 +116,12 @@ public struct MLXTrainerConfig: Sendable {
     public init(
         modelPath: String = "models/Qwen2-0.5B-Instruct-4bit",
         targetModules: [String] = ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-        rankMap: [String: Int] = ["": 6],   // uniform rank 6 (max of D6's attn=4, mlp=6); per-module ranks enforced Anchor-side via SVD truncation
-        alphaMap: [String: Float] = ["": 16.0],  // uniform alpha 16 -> scale = 16/6
+        rankMap: [String: Int] = ["": 4],   // uniform rank 4 (reduced from 6 for memory)
+        alphaMap: [String: Float] = ["": 8.0],  // uniform alpha 8 -> scale = 8/4 = 2
         learningRate: Float = 1e-4,
         weightDecay: Float = 0.01,
         maxGradNorm: Float = 1.0,
-        warmupSteps: Int = 10,
+        warmupSteps: Int = 0,
         maxStepsPerRound: Int = 1,
         batchSize: Int = 1,
         sequenceLength: Int = 64,
@@ -237,9 +246,9 @@ public actor MLXTrainer: LocalTraining {
     /// overwrites parameter VALUES in place, which is all D7's "full
     /// replace semantics" requires; it never needed the container rebuilt.
     public func prepare(globalAdapter: FetchedAdapter?) async throws {
-        appendLog("prepare: start")
+        logTrainer("prepare: start")
         if model == nil {
-            appendLog("prepare: loading base model from \(config.modelPath)")
+            logTrainer("prepare: loading base model from \(config.modelPath)")
             // Load base model from local directory via MLXLMCommon
             let modelDirectory = URL(fileURLWithPath: config.modelPath)
             // Use LLMModelFactory directly rather than the free-function
@@ -263,7 +272,7 @@ public actor MLXTrainer: LocalTraining {
             guard let loadedModel = self.model else {
                 throw TrainingError.ambiguousAdapterConfig("Model failed to load")
             }
-            appendLog("prepare: base model loaded")
+            logTrainer("prepare: base model loaded")
 
             // LoRAContainer.from matches `keys` by EXACT equality against
             // Module.namedModules() paths, not by suffix/substring -- despite
@@ -279,7 +288,7 @@ public actor MLXTrainer: LocalTraining {
             // error if a future base model's module names don't match any of
             // targetModules, instead of the opaque MLX-side trap.
             let availableKeys = (loadedModel as? LoRAModel)?.loraDefaultKeys ?? []
-            appendLog("prepare: availableKeys=\(availableKeys)")
+            logTrainer("prepare: availableKeys=\(availableKeys)")
             var resolvedKeys: [String]? = nil
             if !config.targetModules.isEmpty {
                 let matched = availableKeys.filter { key in
@@ -293,7 +302,7 @@ public actor MLXTrainer: LocalTraining {
                 }
                 resolvedKeys = matched
             }
-            appendLog("prepare: resolvedKeys=\(resolvedKeys ?? [])")
+            logTrainer("prepare: resolvedKeys=\(resolvedKeys ?? [])")
 
             // Single rank/scale for the container (see resolvedRankScale): throws
             // rather than silently collapsing a heterogeneous rankMap to its max.
@@ -301,14 +310,14 @@ public actor MLXTrainer: LocalTraining {
             // targetModules patterns), so the "attn"/"mlp" substring matching in
             // rank(for:)/alpha(for:) has real qualified names to match against.
             let (rank, scale) = try config.resolvedRankScale(forKeys: resolvedKeys ?? config.targetModules)
-            appendLog("prepare: rank=\(rank) scale=\(scale)")
+            logTrainer("prepare: rank=\(rank) scale=\(scale)")
 
             // Adapt every transformer block the model exposes, not a hardcoded
             // count. LoRAContainer.from uses loraLayers.suffix(numLayers), so the
             // true layer count adapts all blocks. Falls back to all layers when
             // the model doesn't report a LoRAModel layer list.
             let numLayers = (loadedModel as? LoRAModel)?.loraLayers.count ?? 0
-            appendLog("prepare: numLayers=\(numLayers)")
+            logTrainer("prepare: numLayers=\(numLayers)")
 
             // Create LoRAConfiguration for DoRA
             let loraConfig = LoRAConfiguration(
@@ -322,12 +331,12 @@ public actor MLXTrainer: LocalTraining {
             )
 
             // Inject DoRA layers using MLX's LoRAContainer
-            appendLog("prepare: injecting LoRA...")
+            logTrainer("prepare: injecting LoRA...")
             self.loraContainer = try LoRAContainer.from(
                 model: loadedModel,
                 configuration: loraConfig
             )
-            appendLog("prepare: LoRA injected")
+            logTrainer("prepare: LoRA injected")
 
             // Explicitly load the container into the model to ensure trainable
             // parameters (LoRA adapters) are tracked by the model. LoRAContainer.from
@@ -645,7 +654,8 @@ extension MLXTrainer: @unchecked Sendable {}
 extension MLXTrainer {
 
     /// Save training checkpoint to an NPZ file.
-    /// Contains: step count, LoRA parameters, model parameters, RNG state.
+    /// Contains: step count, LoRA parameters ONLY (not full model).
+    /// Base model is static on disk - no need to checkpoint it.
     public func saveCheckpoint(to url: URL) async throws {
         guard loraContainer != nil, model != nil else {
             throw TrainingError.notPrepared
@@ -659,7 +669,7 @@ extension MLXTrainer {
         let stepCountArray = NPYArray(descr: "|u8", shape: [1], raw: stepCountData)
         arrays.append(("step_count", stepCountArray))
 
-        // 2. LoRA parameters (flattened)
+        // 2. LoRA parameters only (small - just adapter weights)
         let loraParams = loraContainer!.parameters.flattened()
         for (name, tensor) in loraParams {
             let flat = tensor.flattened().asType(MLX.DType.float32)
@@ -670,24 +680,14 @@ extension MLXTrainer {
             arrays.append(("lora_\(name)", npyArray))
         }
 
-        // 3. Save model parameters (allows optimizer re-initialization on resume)
-        let modelParams = try getModelParameters()
-        for (name, tensor) in modelParams.flattened() {
-            let flat = tensor.flattened().asType(MLX.DType.float32)
-            let floats = flat.asArray(Float.self)
-            let shape = tensor.shape
-            let array = MLXArray(floats, shape).asType(MLX.DType.float32)
-            let npyArray = try NPYArray.fromMLXArray(array)
-            arrays.append(("model_\(name)", npyArray))
-        }
-
         let data = try NPZ.write(arrays)
         try data.write(to: url, options: .atomic)
-        appendLog("Saved checkpoint to \(url.lastPathComponent) (step \(stepCount))")
+        logTrainer("Saved checkpoint to \(url.lastPathComponent) (step \(stepCount))")
     }
 
     /// Load training checkpoint from an NPZ file.
-    /// Restores: step count, LoRA parameters, model parameters, RNG state.
+    /// Restores: step count, LoRA parameters only.
+    /// Base model is reloaded from disk in prepare() - not from checkpoint.
     public func loadCheckpoint(from url: URL) async throws {
         guard loraContainer != nil, model != nil else {
             throw TrainingError.notPrepared
@@ -705,7 +705,7 @@ extension MLXTrainer {
             self.stepCount = Int(value)
         }
 
-        // 2. Restore LoRA parameters
+        // 2. Restore LoRA parameters only (no model params)
         var loraParams: [String: MLXArray] = [:]
         for (key, npyArray) in dict where key.hasPrefix("lora_") {
             let paramName = String(key.dropFirst(5)) // remove "lora_"
@@ -718,25 +718,6 @@ extension MLXTrainer {
             try model!.update(parameters: params, verify: .noUnusedKeys)
         }
 
-        // 3. Restore model parameters (includes optimizer-implicit state)
-        var modelParams: [String: MLXArray] = [:]
-        for (key, npyArray) in dict where key.hasPrefix("model_") {
-            let paramName = String(key.dropFirst(6)) // remove "model_"
-            let floats = try npyArray.floats()
-            let array = MLXArray(floats, npyArray.shape).asType(MLX.DType.float32)
-            modelParams[paramName] = array
-        }
-        if !modelParams.isEmpty {
-            let params = ModuleParameters.unflattened(modelParams)
-            try model!.update(parameters: params, verify: .noUnusedKeys)
-        }
-
-        appendLog("Loaded checkpoint from \(url.lastPathComponent) (step \(stepCount))")
-    }
-
-    /// Get current model parameters for checkpointing.
-    private func getModelParameters() throws -> ModuleParameters {
-        guard let model = model else { throw TrainingError.notPrepared }
-        return model.parameters()
+        logTrainer("Loaded checkpoint from \(url.lastPathComponent) (step \(stepCount))")
     }
 }
