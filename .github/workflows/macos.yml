@@ -210,15 +210,15 @@ jobs:
           xcrun -sdk macosx metallib "$AIRS"/*.air -o "$BINDIR/mlx.metallib"
           ls -la "$BINDIR/mlx.metallib"
 
-      - name: Run real MLX fleet (4 devices, 1 rounds, 10 steps)
+      - name: Run real MLX fleet (4 devices, 2 rounds, 20 steps)
         run: |
           swift run swairm-mlx-client \
             --anchor http://127.0.0.1:8000 \
             --model models/mlx-model \
             --curriculum curriculum/epoch_0 \
             --fleet 1 \
-            --rounds 1 \
-            --max-steps 1 \
+            --rounds 2 \
+            --max-steps 10 \
             --batch-size 1 \
             --seq-len 64
 
