@@ -145,13 +145,13 @@ public struct MLXTrainerConfig: Sendable {
 
     /// Resolve rank for a module name.
     func rank(for moduleName: String) -> Int {
-        // With uniform rankMap ["": rank], all modules resolve to the same rank
+        // With uniform rankMap [\"\": rank], all modules resolve to the same rank
         return rankMap[""] ?? 4
     }
 
     /// Resolve alpha for a module name.
     func alpha(for moduleName: String) -> Float {
-        // With uniform alphaMap ["": alpha], all modules resolve to the same alpha
+        // With uniform alphaMap [\"\": alpha], all modules resolve to the same alpha
         return alphaMap[""] ?? 16.0
     }
 
@@ -483,17 +483,32 @@ public actor MLXTrainer: LocalTraining {
 
     /// Export full adapter state for upload (D7 semantics: full adapter, not delta).
     public func exportAdapter() async throws -> [String: AdapterModule] {
-        guard let container = loraContainer else {
+        guard loraContainer != nil, let model = model else {
             throw TrainingError.noAdapter
         }
 
-        appendLog("exportAdapter: container.parameters=\(container.parameters.flattened().count)")
+        // Must read from model.trainableParameters(), NOT loraContainer.parameters.
+        // LoRAContainer is a struct (mlx-swift-lm) whose `parameters` is a `let`
+        // captured ONCE when the container is built -- its own doc comment says
+        // the values are "fully evaluated and never updated". Since loraContainer
+        // is only constructed once per device (guarded by `model == nil` in
+        // prepare(), so it happens on round 0 and never again), reading it here
+        // exported that same frozen, first-round snapshot every round -- no
+        // matter how much local training ran or what global adapter had just
+        // been applied to `model`. That's why the Anchor kept effectively
+        // re-aggregating the first adapter forever instead of this device's
+        // actual progress. model.trainableParameters() recomputes live from the
+        // model's current state each call, and (thanks to freeze() + the noGrad
+        // filter set up in LoRAContainer.from) is still scoped to just the
+        // LoRA/DoRA adapter parameters -- same keys, live values.
+        let currentParameters = model.trainableParameters()
+        appendLog("exportAdapter: currentParameters=\(currentParameters.flattened().count)")
         var modules: [String: AdapterModule] = [:]
 
         // Group parameters by layer name
         var layerParams: [String: (A: MLXArray?, B: MLXArray?, M: MLXArray?)] = [:]
 
-        for (name, tensor) in container.parameters.flattened() {
+        for (name, tensor) in currentParameters.flattened() {
             // Parse layer name from parameter key
             // Keys look like: "layers.0.attention.q_proj.lora_a", "layers.0.attention.q_proj.lora_b", "layers.0.attention.q_proj.m"
             let parts = name.split(separator: ".")
@@ -661,7 +676,7 @@ extension MLXTrainer {
     /// Contains: step count, LoRA parameters ONLY (not full model).
     /// Base model is static on disk - no need to checkpoint it.
     public func saveCheckpoint(to url: URL) async throws {
-        guard loraContainer != nil, model != nil else {
+        guard loraContainer != nil, let model = model else {
             throw TrainingError.notPrepared
         }
 
@@ -673,8 +688,10 @@ extension MLXTrainer {
         let stepCountArray = NPYArray(descr: "|u8", shape: [1], raw: stepCountData)
         arrays.append(("step_count", stepCountArray))
 
-        // 2. LoRA parameters only (small - just adapter weights)
-        let loraParams = loraContainer!.parameters.flattened()
+        // 2. LoRA parameters only (small - just adapter weights).
+        // Same fix as exportAdapter() above: read live state from the model,
+        // not the frozen loraContainer.parameters snapshot -- see that note.
+        let loraParams = model.trainableParameters().flattened()
         for (name, tensor) in loraParams {
             let flat = tensor.flattened().asType(MLX.DType.float32)
             let floats = flat.asArray(Float.self)
