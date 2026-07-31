@@ -197,7 +197,19 @@ public final class AnchorClient: AnchorConnecting, CurriculumDownloading, BaseMo
     }
 
     private func headerValue(_ name: String, in http: HTTPURLResponse) -> String? {
-        http.allHeaderFields[name] as? String
+        // HTTP header field names are case-insensitive; try exact match first,
+        // then case-insensitive fallback (Foundation sometimes normalizes keys)
+        if let exact = http.allHeaderFields[name] as? String {
+            return exact
+        }
+        let lower = name.lowercased()
+        for (key, value) in http.allHeaderFields {
+            if (key as? String)?.lowercased() == lower,
+               let str = value as? String {
+                return str
+            }
+        }
+        return nil
     }
 
     private func request(path: String, method: String,
