@@ -118,7 +118,7 @@ public struct MLXTrainerConfig: Sendable {
         targetModules: [String] = ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
         rankMap: [String: Int] = ["": 6],   // uniform rank 6 (D6 max rank for all target modules)
         alphaMap: [String: Float] = ["": 16.0],  // uniform alpha 16 -> scale = 16/6
-        learningRate: Float = 1e-4,
+        learningRate: Float = 5e-5,
         weightDecay: Float = 0.01,
         maxGradNorm: Float = 1.0,
         warmupSteps: Int = 0,

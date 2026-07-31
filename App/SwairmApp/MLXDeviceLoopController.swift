@@ -71,7 +71,7 @@ final class MLXSettings {
     var learningRate: Float {
         get {
             let v = UserDefaults.standard.float(forKey: "mlx.learningRate")
-            return (v == 0 ? 1e-4 : v).clamped(to: 1e-5...1e-3)
+            return (v == 0 ? 5e-5 : v).clamped(to: 1e-5...1e-3)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.learningRate") }
     }
