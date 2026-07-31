@@ -201,7 +201,7 @@ final class MLXDeviceLoopController {
             runTask = Task { [weak self] in
                 let budget = ResourceBudget(
                     maxSteps: maxSteps,
-                    maxWallClock: 300,
+                    maxWallClock: 3600,  // 60 minutes - MLX on iPhone is slow due to shader compilation
                     stopOnSeriousThermalState: true,
                     minBatteryFraction: 0.2
                 )

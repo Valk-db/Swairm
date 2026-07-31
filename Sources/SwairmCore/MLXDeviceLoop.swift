@@ -160,7 +160,7 @@ public actor MLXDeviceLoop {
 
     /// One full round: status -> fetch -> prepare -> train -> export -> upload.
     public func runRound(budget: ResourceBudget = ResourceBudget(
-        maxSteps: 60, maxWallClock: 300
+        maxSteps: 60, maxWallClock: 3600
     )) async throws -> MLXRoundResult {
         let round = roundsRun
         roundsRun += 1
