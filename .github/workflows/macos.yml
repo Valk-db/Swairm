@@ -222,6 +222,18 @@ jobs:
             --batch-size 1 \
             --seq-len 64
 
+      # Wait for aggregation interval to fire (5s) and worker to drain queue
+      - name: Wait for aggregation to complete
+        run: |
+          sleep 10
+          for i in {1..6}; do
+            curl -sf http://127.0.0.1:8000/status -o status.json
+            if python -c "import json; s = json.load(open('status.json')); print('version:', s.get('version'))"; then
+              break
+            fi
+            sleep 2
+          done
+
       - name: Verify aggregation rounds happened
         run: |
           curl -sf http://127.0.0.1:8000/status -o status.json
