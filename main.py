@@ -741,12 +741,14 @@ try:
                 ADAPTER_FETCHES.labels(result="rejected_hmac").inc()
             return Response(status_code=401, content="Invalid HMAC signature")
         state = load_state()
+        print(f"[adapter_latest] state version={state['version']}, curriculum_epoch={state['curriculum_epoch']}")
         if state["version"] == 0:
             if PROMETHEUS_AVAILABLE:
                 ADAPTER_FETCHES.labels(result="not_found").inc()
             return Response(status_code=404,
                             content="no global adapter yet")
         path = MODELS_DIR / f"v_{state['version']:05d}.npz"
+        print(f"[adapter_latest] looking for {path}, exists={path.exists()}")
         if not path.exists():
             if PROMETHEUS_AVAILABLE:
                 ADAPTER_FETCHES.labels(result="error").inc()
@@ -754,13 +756,14 @@ try:
                             content="adapter file missing on disk")
         if PROMETHEUS_AVAILABLE:
             ADAPTER_FETCHES.labels(result="ok").inc()
+        headers = {"X-Adapter-Version": str(state["version"]),
+                   "X-Curriculum-Epoch": str(state["curriculum_epoch"]),
+                   "Cache-Control": "no-store, no-cache, must-revalidate",
+                   "Pragma": "no-cache"}
+        print(f"[adapter_latest] returning headers: {headers}")
         return Response(content=path.read_bytes(),
                         media_type="application/octet-stream",
-                        headers={"X-Adapter-Version": str(state["version"]),
-                                 "X-Curriculum-Epoch":
-                                     str(state["curriculum_epoch"]),
-                                 "Cache-Control": "no-store, no-cache, must-revalidate",
-                                 "Pragma": "no-cache"})
+                        headers=headers)
 
 
     @app.get("/curriculum/{epoch}/manifest")
