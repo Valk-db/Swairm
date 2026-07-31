@@ -121,10 +121,13 @@ do {
         }
     }
 
-    // The worker aggregates on its own interval; give it a moment, then
-    // confirm the version advanced past where we started.
-    try await Task.sleep(nanoseconds: 6_000_000_000)
-    let vEnd = try await client.status().version
+    // The worker aggregates on its own interval; poll for version advance.
+    let deadline = Date().addingTimeInterval(30)
+    var vEnd = v0
+    while vEnd <= v0 && Date() < deadline {
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        vEnd = try await client.status().version
+    }
     print("[end] anchor version = \(vEnd) (started at \(v0))")
     if vEnd <= v0 {
         print("ERROR: anchor version did not advance -- round(s) not aggregated")
