@@ -8,7 +8,7 @@ import ssl
 import asyncio
 import logging
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Any
 import subprocess
 import tempfile
@@ -106,7 +106,7 @@ class CertManager:
             # ssl._ssl._test_decode_cert is a private API but works across Python versions
             cert = ssl._ssl._test_decode_cert(str(self.cert_path))  # type: ignore[attr-defined]
             not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-            return not_after > datetime.utcnow() + timedelta(days=7)  # 7-day buffer
+            return not_after > datetime.now(timezone.utc) + timedelta(days=7)  # 7-day buffer
         except Exception:
             return False
 
@@ -206,6 +206,11 @@ class CertManager:
 
         logger.info(f"Requesting Let's Encrypt certificate for {self.domain}...")
 
+        # Run the synchronous ACME operations in a thread pool
+        return await asyncio.to_thread(self._request_letsencrypt_cert_sync)
+
+    def _request_letsencrypt_cert_sync(self) -> Tuple[Path, Path]:
+        """Synchronous implementation of Let's Encrypt certificate request."""
         # ACME directory URL
         directory_url = (
             "https://acme-staging-v02.api.letsencrypt.org/directory"

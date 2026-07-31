@@ -179,6 +179,17 @@ public actor LinearProxyTrainer: LocalTraining {
                 break
             }
 
+            // Thermal pacing: yield if thermal state is serious or critical
+            #if !os(Linux) && !os(Windows)
+            if budget.stopOnSeriousThermalState {
+                let state = ProcessInfo.processInfo.thermalState
+                if state == .serious || state == .critical {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+            }
+            #endif
+
             let (target, targetM) = try LinearProxyBatchCodec.decode(batch.data)
             guard target.rows == config.rows, target.cols == config.cols,
                   targetM.count == config.rows else {
@@ -224,7 +235,10 @@ public actor LinearProxyTrainer: LocalTraining {
         #if !os(Linux) && !os(Windows)
         if budget.stopOnSeriousThermalState {
             let state = ProcessInfo.processInfo.thermalState
-            if state == .serious || state == .critical { return .thermal }
+            if state == .serious || state == .critical {
+                // Thermal pacing: yield for a few seconds instead of aborting
+                return nil  // Let the training loop continue and handle pacing there
+            }
         }
         #endif
         if let minBattery = budget.minBatteryFraction,

@@ -5,7 +5,6 @@ struct ContentView: View {
     @State private var useMLXTrainer = false
     @State private var proxyController = DeviceLoopController()
     @State private var mlxController = MLXDeviceLoopController()
-    @State private var bgScheduler = BackgroundTaskScheduler.shared
 
     var isRunning: Bool {
         useMLXTrainer ? mlxController.isRunning : proxyController.isRunning
@@ -151,54 +150,6 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Background Training") {
-                    Toggle("Enable Background Rounds", isOn: $bgScheduler.isBackgroundEnabled)
-                        .disabled(bgScheduler.isBackgroundTaskRunning)
-
-                    if bgScheduler.lastResult != nil {
-                        let result = bgScheduler.lastResult!
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Last Round: \(result.round)")
-                                Spacer()
-                                Text(result.isMLXMode ? "MLX" : "Proxy")
-                                    .font(.caption)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(result.isMLXMode ? Color.blue.opacity(0.2) : Color.green.opacity(0.2))
-                                    .cornerRadius(4)
-                            }
-                            if let loss = result.finalLoss {
-                                Text("Loss: \(String(format: "%.4f", loss))")
-                                    .font(.caption.monospaced())
-                            }
-                            Text("Anchor v\(result.anchorVersion) • \(result.stepsCompleted) steps • \(result.termination)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(result.timestamp, style: .relative)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            if let error = result.error {
-                                Text("Error: \(error)")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                    } else {
-                        Text("No background rounds completed yet")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button(bgScheduler.isBackgroundTaskRunning ? "Background task running…" : "Run Background Round Now") {
-                        Task {
-                            await bgScheduler.runBackgroundRoundNow()
-                        }
-                    }
-                    .disabled(bgScheduler.isBackgroundTaskRunning || bgScheduler.anchorURLText.isEmpty)
-                    .font(.caption)
-                }
-
                 Section("Status") {
                     LabeledContent("Device", value: deviceID)
                     LabeledContent("Anchor version",
@@ -238,32 +189,6 @@ struct ContentView: View {
     }
 
     private func start() {
-        if useMLXTrainer {
-            bgScheduler.anchorURLText = mlxController.settings.anchorURLText
-            bgScheduler.config.deviceIndex = mlxController.settings.deviceIndex
-            bgScheduler.config.useMLXTrainer = true
-            bgScheduler.config.modelPath = mlxController.settings.modelPath
-            bgScheduler.config.curriculumDirectory = mlxController.settings.curriculumDirectory
-            bgScheduler.config.maxStepsPerRound = mlxController.settings.maxStepsPerRound
-            bgScheduler.config.batchSize = mlxController.settings.batchSize
-            bgScheduler.config.sequenceLength = mlxController.settings.sequenceLength
-            bgScheduler.config.learningRate = mlxController.settings.learningRate
-            bgScheduler.config.weightDecay = mlxController.settings.weightDecay
-            bgScheduler.config.maxGradNorm = mlxController.settings.maxGradNorm
-            bgScheduler.config.warmupSteps = mlxController.settings.warmupSteps
-            bgScheduler.config.targetModules = mlxController.settings.targetModules
-            bgScheduler.config.loraRank = mlxController.settings.loraRank
-            bgScheduler.config.loraAlpha = mlxController.settings.loraAlpha
-            bgScheduler.config.seed = mlxController.settings.seed
-            bgScheduler.config.curriculumEpoch = mlxController.settings.curriculumEpoch
-        } else {
-            bgScheduler.anchorURLText = proxyController.settings.anchorURLText
-            bgScheduler.config.deviceIndex = proxyController.settings.deviceIndex
-            bgScheduler.config.useMLXTrainer = false
-            bgScheduler.config.anchorURL = proxyController.settings.anchorURLText
-            bgScheduler.config.intervalSeconds = proxyController.settings.intervalSeconds
-        }
-
         if useMLXTrainer {
             mlxController.start()
         } else {

@@ -116,8 +116,8 @@ public struct MLXTrainerConfig: Sendable {
     public init(
         modelPath: String = "models/Qwen2-0.5B-Instruct-4bit",
         targetModules: [String] = ["q_proj", "v_proj", "gate_proj", "up_proj", "down_proj"],
-        rankMap: [String: Int] = ["": 4],   // uniform rank 4 (reduced from 6 for memory)
-        alphaMap: [String: Float] = ["": 8.0],  // uniform alpha 8 -> scale = 8/4 = 2
+        rankMap: [String: Int] = ["": 6],   // uniform rank 6 (D6 max rank for all target modules)
+        alphaMap: [String: Float] = ["": 16.0],  // uniform alpha 16 -> scale = 16/6
         learningRate: Float = 1e-4,
         weightDecay: Float = 0.01,
         maxGradNorm: Float = 1.0,
@@ -400,10 +400,14 @@ public actor MLXTrainer: LocalTraining {
                 termination = .wallClockBudget
                 break
             }
-            if budget.stopOnSeriousThermalState &&
-               ProcessInfo.processInfo.thermalState == .serious {
-                termination = .thermal
-                break
+            if budget.stopOnSeriousThermalState {
+                let state = ProcessInfo.processInfo.thermalState
+                if state == .serious || state == .critical {
+                    // Thermal pacing: yield for a few seconds instead of aborting
+                    appendLog("Thermal state \(state) — pacing 2s")
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
             }
 
             // Get next batch

@@ -16,9 +16,6 @@ jobs:
       - name: Configure Git for SwiftPM
         run: git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Clear SwiftPM Cache
-        run: rm -rf .build ~/Library/Caches/org.swift.swiftpm
-
       - name: swift build
         run: swift build
 
@@ -35,9 +32,6 @@ jobs:
 
       - name: Configure Git for SwiftPM
         run: git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Clear SwiftPM Cache
-        run: rm -rf .build ~/Library/Caches/org.swift.swiftpm
 
       - uses: actions/setup-python@v5
         with:
@@ -103,9 +97,6 @@ jobs:
 
       - name: Configure Git for SwiftPM
         run: git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Clear SwiftPM Cache
-        run: rm -rf .build ~/Library/Caches/org.swift.swiftpm
 
       - uses: actions/setup-python@v5
         with:
@@ -259,9 +250,6 @@ jobs:
 
       - name: Configure Git for SwiftPM
         run: git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Clear SwiftPM Cache
-        run: rm -rf .build ~/Library/Caches/org.swift.swiftpm
 
       - name: Install XcodeGen
         run: brew install xcodegen

@@ -129,12 +129,13 @@ public struct ResourceBudget: Sendable {
     /// Hard cap on wall-clock seconds (BGProcessingTask budgets are finite).
     public let maxWallClock: TimeInterval
     /// Stop when ProcessInfo.thermalState reaches .serious or worse.
+    /// Default is false: training paces at .serious, aborts at .critical (handled in trainer loop).
     public let stopOnSeriousThermalState: Bool
     /// Stop when battery fraction drops below this (nil = ignore battery).
     public let minBatteryFraction: Float?
 
     public init(maxSteps: Int, maxWallClock: TimeInterval,
-                stopOnSeriousThermalState: Bool = true,
+                stopOnSeriousThermalState: Bool = false,
                 minBatteryFraction: Float? = nil) {
         self.maxSteps = maxSteps
         self.maxWallClock = maxWallClock

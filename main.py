@@ -108,7 +108,7 @@ QUEUE_QUARANTINE = BASE_DIR / "queue" / "quarantine"
 MODELS_DIR = BASE_DIR / "models"
 STATE_PATH = BASE_DIR / "state.json"
 BASE_MODEL_DIR = BASE_DIR / "models" / "base"
-AGG_INTERVAL_S = int(os.environ.get("FCS_AGG_INTERVAL_S", str(30 * 60)))        # worker drain interval (matches sim cadence)
+AGG_INTERVAL_S = int(os.environ.get("FCS_AGG_INTERVAL_S", str(5)))          # worker drain interval (5s for testing; was 30*60)
 # Upload size limit (DoS protection) - 50MB default
 MAX_UPLOAD_MB = int(os.environ.get("FCS_MAX_UPLOAD_MB", "50"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -318,10 +318,44 @@ HMAC_PROTECTED_PATHS = {
     "/models/base/",  # prefix match for all base model endpoints
 }
 
+# Nonce store for replay protection (in-memory, process lifetime)
+# Maps nonce -> timestamp. Cleaned periodically.
+_nonce_store: dict[str, float] = {}
+_nonce_ttl = 300  # 5 minutes
+
 def verify_hmac(request: "Request", body: bytes) -> bool:
     """Verify HMAC-SHA256 signature on request. Returns True if valid or auth disabled."""
     if not HMAC_SECRET:
         return True  # auth disabled (dev mode)
+
+    # Check timestamp to prevent replay attacks
+    timestamp_header = request.headers.get("X-Request-Timestamp")
+    if timestamp_header:
+        try:
+            request_time = int(timestamp_header)
+            now = int(time.time())
+            if abs(now - request_time) > 300:  # 5 minute window
+                return False
+        except ValueError:
+            return False
+    else:
+        return False  # Require timestamp
+
+    # Check nonce for replay protection
+    nonce = request.headers.get("X-Request-Nonce")
+    if not nonce:
+        return False  # Require nonce
+    if nonce in _nonce_store:
+        return False  # Replay detected
+    _nonce_store[nonce] = time.time()
+
+    # Clean old nonces periodically
+    if len(_nonce_store) > 10000:
+        now = time.time()
+        for k, v in list(_nonce_store.items()):
+            if now - v > _nonce_ttl:
+                del _nonce_store[k]
+
     sig_header = request.headers.get("X-HMAC-Signature")
     if not sig_header:
         return False
@@ -329,8 +363,8 @@ def verify_hmac(request: "Request", body: bytes) -> bool:
     if not sig_header.startswith("sha256="):
         return False
     provided = sig_header[7:]  # strip "sha256="
-    # Canonical string: METHOD\nPATH\nBODY
-    canonical = f"{request.method}\n{request.url.path}\n".encode() + body
+    # Canonical string: METHOD\nPATH\nTIMESTAMP\nNONCE\nBODY
+    canonical = f"{request.method}\n{request.url.path}\n{timestamp_header}\n{nonce}\n".encode() + body
     expected = hmac.new(HMAC_SECRET, canonical, hashlib.sha256).hexdigest()
     return hmac.compare_digest(provided, expected)
 
@@ -344,7 +378,7 @@ for d in (QUEUE_TEMP, QUEUE_PENDING, QUEUE_PROCESSED, QUEUE_QUARANTINE,
 def load_state():
     if STATE_PATH.exists():
         return json.loads(STATE_PATH.read_text())
-    return {"version": 0, "curriculum_epoch": 1, "rounds": 0,
+    return {"version": 0, "curriculum_epoch": 0, "rounds": 0,
             "participation_log": []}
 
 
@@ -668,6 +702,19 @@ try:
 
     @app.post("/upload")
     async def upload(request: Request):
+        # Check Content-Length header first (DoS protection before reading body)
+        content_length = request.headers.get("Content-Length")
+        if content_length:
+            try:
+                cl = int(content_length)
+                if cl > MAX_UPLOAD_BYTES:
+                    if PROMETHEUS_AVAILABLE:
+                        UPLOADS_RECEIVED.labels(result="rejected_size").inc()
+                    return Response(status_code=413,
+                                    content=f"Payload {cl} bytes exceeds {MAX_UPLOAD_MB}MB limit")
+            except ValueError:
+                pass  # Invalid Content-Length, let body read handle it
+
         raw = await request.body()
         if len(raw) > MAX_UPLOAD_BYTES:
             if PROMETHEUS_AVAILABLE:
@@ -711,7 +758,9 @@ try:
                         media_type="application/octet-stream",
                         headers={"X-Adapter-Version": str(state["version"]),
                                  "X-Curriculum-Epoch":
-                                     str(state["curriculum_epoch"])})
+                                     str(state["curriculum_epoch"]),
+                                 "Cache-Control": "no-store, no-cache, must-revalidate",
+                                 "Pragma": "no-cache"})
 
 
     @app.get("/curriculum/{epoch}/manifest")
@@ -794,6 +843,11 @@ try:
     @app.get("/models/base/{model_name}/manifest")
     async def base_model_manifest(model_name: str, request: Request):
         """Return manifest of files for a base model. Auto-prepares model if missing."""
+        # Validate model_name to prevent path traversal
+        if ".." in model_name or "/" in model_name or "\\" in model_name:
+            if PROMETHEUS_AVAILABLE:
+                BASE_MODEL_MANIFEST_REQUESTS.labels(result="invalid_name", model=model_name).inc()
+            return Response(status_code=400, content="invalid model name")
         if not verify_hmac(request, b""):
             if PROMETHEUS_AVAILABLE:
                 BASE_MODEL_MANIFEST_REQUESTS.labels(result="rejected_hmac", model=model_name).inc()

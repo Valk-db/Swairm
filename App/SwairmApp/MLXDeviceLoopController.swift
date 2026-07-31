@@ -103,14 +103,14 @@ final class MLXSettings {
     var loraRank: Int {
         get {
             let v = UserDefaults.standard.integer(forKey: "mlx.loraRank")
-            return (v == 0 ? 4 : v).clamped(to: 1...8)
+            return (v == 0 ? 6 : v).clamped(to: 1...16)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraRank") }
     }
     var loraAlpha: Float {
         get {
             let v = UserDefaults.standard.float(forKey: "mlx.loraAlpha")
-            return (v == 0 ? 16.0 : v).clamped(to: 1...32)
+            return (v == 0 ? 16.0 : v).clamped(to: 1...64)
         }
         set { UserDefaults.standard.set(newValue, forKey: "mlx.loraAlpha") }
     }
@@ -193,6 +193,7 @@ final class MLXDeviceLoopController {
             )
 
             isRunning = true
+            UIApplication.shared.isIdleTimerDisabled = true
             append("Started \(deviceID) (MLX) against \(url.absoluteString)")
 
             let interval = settings.intervalSeconds
@@ -363,6 +364,7 @@ final class MLXDeviceLoopController {
 
     private func finish() {
         isRunning = false
+        UIApplication.shared.isIdleTimerDisabled = false
         append("Stopped")
     }
 
